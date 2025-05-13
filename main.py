@@ -16,14 +16,32 @@ from dotenv import load_dotenv
 from pathlib import Path
 import shutil
 import logging
-import asyncio
+from contextlib import asynccontextmanager
 
+# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Load environment variables
 load_dotenv()
 
-app = FastAPI()
+# Lifespan handler for startup and shutdown
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Create database tables
+    try:
+        await create_tables()
+        logger.info("Database tables created successfully")
+    except Exception as e:
+        logger.error(f"Error creating database tables: {str(e)}")
+        raise
+    yield
+    # Shutdown: Dispose of the database engine
+    await engine.dispose()
+    logger.info("Database engine disposed and application shutdown")
+
+# Initialize FastAPI with lifespan handler
+app = FastAPI(lifespan=lifespan)
 app.include_router(auth.router)
 
 # Static files for image uploads
@@ -50,11 +68,6 @@ user_dependency = Annotated[dict, Depends(get_active_user)]
 async def create_tables():
     async with engine.begin() as conn:
         await conn.run_sync(models.Base.metadata.create_all)
-
-# Run table creation at startup
-@app.on_event("startup")
-async def startup_event():
-    await create_tables()
 
 @app.get("/")
 async def user(user: user_dependency, db: AsyncSession = Depends(db_dependency)):

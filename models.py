@@ -12,7 +12,9 @@ class Users(Base):
 class Categories(Base):
     __tablename__ = "categories"
     id = Column(Integer, primary_key=True, index=True)
+    code = Column(String, unique=True, index=True)  # Added code
     name = Column(String, index=True)
+    description = Column(String, nullable=True)  # Added description
 
 class Products(Base):
     __tablename__ = "products"
