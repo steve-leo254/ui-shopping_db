@@ -1,21 +1,24 @@
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr
+from datetime import datetime
 from typing import List, Optional
-import re
+from enum import Enum
+from decimal import Decimal
+
+class Role(str, Enum):
+    ADMIN = "admin"
+    CUSTOMER = "customer"
+
+class OrderStatus(str, Enum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    SHIPPED = "shipped"
+    DELIVERED = "delivered"
+    CANCELLED = "cancelled"
 
 class CreateUserRequest(BaseModel):
-    username: str = Field(..., max_length=80, min_length=3)
+    username: str
     email: EmailStr
-    password: str = Field(..., min_length=8)
-
-    @field_validator('password')
-    def validate_password(cls, v):
-        if not re.search(r'[A-Za-z]', v):
-            raise ValueError('Password must contain at least one letter')
-        if not re.search(r'\d', v):
-            raise ValueError('Password must contain at least one digit')
-        if not re.match(r'^[A-Za-z\d@#$%^&+=]{8,}$', v):
-            raise ValueError('Password contains invalid characters')
-        return v
+    password: str
 
 class LoginUserRequest(BaseModel):
     email: EmailStr
@@ -25,29 +28,51 @@ class Token(BaseModel):
     access_token: str
     token_type: str
 
-class ProductsBase(BaseModel):
-    name: str = Field(..., max_length=100)
-    brand: str = Field(..., max_length=50)
-    cost: float = Field(..., gt=0)
-    price: float = Field(..., gt=0)
-    image_url: str = Field(..., max_length=255)
-    stock_quantity: int = Field(..., ge=0)
-    barcode: str = Field(..., max_length=50)
-    description: Optional[str] = Field(None, max_length=65535)
-    category_id: int = Field(..., gt=0)
+class CategoryBase(BaseModel):
+    name: str
+    description: Optional[str]
 
-    @field_validator('barcode')
-    def validate_barcode(cls, v):
-        if not re.match(r'^[A-Za-z0-9\-]{1,50}$', v):
-            raise ValueError('Invalid barcode format')
-        return v
+class CategoryResponse(CategoryBase):
+    id: int
+
+class ProductsBase(BaseModel):
+    name: str
+    cost: float
+    price: float
+    img_url: str
+    stock_quantity: float
+    barcode: int
+    category_id: Optional[int]
+    brand: Optional[str]
+    description: Optional[str]  # New description field
+
+class ProductResponse(ProductsBase):
+    id: int
+    created_at: datetime
+    user_id: int
+    category: Optional[CategoryResponse]
 
 class CartItem(BaseModel):
-    id: int = Field(..., gt=0)
-    quantity: float = Field(..., gt=0)
+    id: int
+    quantity: float
 
 class CartPayload(BaseModel):
     cart: List[CartItem]
+
+class OrderDetailResponse(BaseModel):
+    order_detail_id: int
+    product_id: Optional[int]
+    quantity: float
+    total_price: float
+    product: Optional[ProductResponse]
+
+class OrderResponse(BaseModel):
+    order_id: int
+    total: float
+    datetime: datetime
+    status: OrderStatus
+    user_id: int
+    order_details: List[OrderDetailResponse]
 
 class TokenVerifyRequest(BaseModel):
     token: str
@@ -56,35 +81,26 @@ class ForgotPasswordRequest(BaseModel):
     email: EmailStr
 
 class ResetPasswordRequest(BaseModel):
-    new_password: str = Field(..., min_length=8)
-
-    @field_validator('new_password')
-    def validate_new_password(cls, v):
-        if not re.search(r'[A-Za-z]', v):
-            raise ValueError('Password must contain at least one letter')
-        if not re.search(r'\d', v):
-            raise ValueError('Password must contain at least one digit')
-        if not re.match(r'^[A-Za-z\d@#$%^&+=]{8,}$', v):
-            raise ValueError('Password contains invalid characters')
-        return v
+    new_password: str
 
 class TokenVerificationResponse(BaseModel):
     username: str
     tokenverification: str
 
 class UpdateProduct(BaseModel):
-    name: Optional[str] = Field(None, max_length=100)
-    brand: Optional[str] = Field(None, max_length=50)
-    price: Optional[float] = Field(None, gt=0)
-    cost: Optional[float] = Field(None, gt=0)
-    image_url: Optional[str] = Field(None, max_length=255)
-    stock_quantity: Optional[int] = Field(None, ge=0)
-    barcode: Optional[str] = Field(None, max_length=50)
-    description: Optional[str] = Field(None, max_length=65535)
-    category_id: Optional[int] = Field(None, gt=0)
+    name: Optional[str]
+    price: Optional[float]
+    cost: Optional[float]
+    img_url: Optional[str]
+    stock_quantity: Optional[float]
+    barcode: Optional[int]
+    category_id: Optional[int]
+    brand: Optional[str]
+    description: Optional[str] 
 
-    @field_validator('barcode')
-    def validate_barcode(cls, v):
-        if v and not re.match(r'^[A-Za-z0-9\-]{1,50}$', v):
-            raise ValueError('Invalid barcode format')
-        return v
+class PaginatedProductResponse(BaseModel):
+    items: List[ProductResponse]
+    total: int
+    page: int
+    limit: int
+    pages: int
