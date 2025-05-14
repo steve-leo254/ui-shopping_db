@@ -5,8 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from starlette import status
 from database import db_dependency
-from models import Users
-from fastapi.security import  OAuth2PasswordBearer
+from models import Users, Role  # Import Role enum
+from fastapi.security import OAuth2PasswordBearer
 import jwt
 from pydantic_model import (
     CreateUserRequest,
@@ -64,7 +64,7 @@ async def register_customer(db: db_dependency, create_user_request: CreateUserRe
             username=create_user_request.username,
             email=create_user_request.email,
             hashed_password=bcrypt_context.hash(create_user_request.password),
-            role="customer"
+            role=Role.CUSTOMER  # Use Role enum
         )
         session.add(create_user_model)
         await session.commit()
@@ -89,7 +89,7 @@ async def register_admin(db: db_dependency, create_user_request: CreateUserReque
             username=create_user_request.username,
             email=create_user_request.email,
             hashed_password=bcrypt_context.hash(create_user_request.password),
-            role="admin"
+            role=Role.ADMIN  # Use Role enum
         )
         session.add(create_user_model)
         await session.commit()
@@ -199,7 +199,7 @@ async def reset_password(token: str, reset_password_request: ResetPasswordReques
     except jwt.DecodeError:
         logger.warning("Invalid reset token")
         raise HTTPException(status_code=401, detail="Invalid token")
-    
+
 def create_access_token(username: str, user_id: int, role: str, expires_delta: timedelta):
     encode = {"sub": username, "id": user_id, "role": role}
     expires = datetime.utcnow() + expires_delta
