@@ -36,9 +36,9 @@ bcrypt_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_bearer = OAuth2PasswordBearer(tokenUrl="auth/login")
 
 conf = ConnectionConfig(
-    MAIL_USERNAME="ericoochieng456@gmail.com",
-    MAIL_PASSWORD="dhqf lxgw zlaw bwdj",
-    MAIL_FROM="ericoochieng456@gmail.com",
+    MAIL_USERNAME="lynnsteve@gmail.com",
+    MAIL_PASSWORD="12345678",
+    MAIL_FROM="lynnsteve@gmail.com",
     MAIL_PORT=587,
     MAIL_SERVER="smtp.gmail.com",
     MAIL_STARTTLS=True,
@@ -47,19 +47,22 @@ conf = ConnectionConfig(
     VALIDATE_CERTS=True,
 )
 
+
 @router.post("/register/customer", status_code=status.HTTP_201_CREATED)
 async def register_customer(db: db_dependency, create_user_request: CreateUserRequest):
     logger.info(f"Customer registration payload: {create_user_request}")
     async with db as session:
         result = await session.execute(
             select(Users).filter(
-                (Users.email == create_user_request.email) | (Users.username == create_user_request.username)
+                (Users.email == create_user_request.email) | (
+                    Users.username == create_user_request.username)
             )
         )
         existing_user = result.scalars().first()
         if existing_user:
-            raise HTTPException(status_code=400, detail="Username or email already exists")
-        
+            raise HTTPException(
+                status_code=400, detail="Username or email already exists")
+
         create_user_model = Users(
             username=create_user_request.username,
             email=create_user_request.email,
@@ -69,8 +72,10 @@ async def register_customer(db: db_dependency, create_user_request: CreateUserRe
         session.add(create_user_model)
         await session.commit()
         await session.refresh(create_user_model)
-        logger.info(f"Customer {create_user_request.username} registered successfully")
+        logger.info(
+            f"Customer {create_user_request.username} registered successfully")
         return {"message": "Customer created successfully"}
+
 
 @router.post("/register/admin", status_code=status.HTTP_201_CREATED)
 async def register_admin(db: db_dependency, create_user_request: CreateUserRequest):
@@ -78,13 +83,15 @@ async def register_admin(db: db_dependency, create_user_request: CreateUserReque
     async with db as session:
         result = await session.execute(
             select(Users).filter(
-                (Users.email == create_user_request.email) | (Users.username == create_user_request.username)
+                (Users.email == create_user_request.email) | (
+                    Users.username == create_user_request.username)
             )
         )
         existing_user = result.scalars().first()
         if existing_user:
-            raise HTTPException(status_code=400, detail="Username or email already exists")
-        
+            raise HTTPException(
+                status_code=400, detail="Username or email already exists")
+
         create_user_model = Users(
             username=create_user_request.username,
             email=create_user_request.email,
@@ -94,8 +101,10 @@ async def register_admin(db: db_dependency, create_user_request: CreateUserReque
         session.add(create_user_model)
         await session.commit()
         await session.refresh(create_user_model)
-        logger.info(f"Admin {create_user_request.username} registered successfully")
+        logger.info(
+            f"Admin {create_user_request.username} registered successfully")
         return {"message": "Admin created successfully"}
+
 
 async def authenticate_user(email: str, password: str, db: AsyncSession):
     result = await db.execute(select(Users).filter(Users.email == email))
@@ -106,13 +115,16 @@ async def authenticate_user(email: str, password: str, db: AsyncSession):
         raise HTTPException(status_code=401, detail="Invalid password")
     return user
 
+
 @router.post("/login", response_model=Token)
 async def login(form_data: LoginUserRequest, db: db_dependency):
     logger.info(f"Login attempt for email: {form_data.email}")
-    user = await authenticate_user(form_data.email, form_data.password, db)
-    token = create_access_token(user.username, user.id, user.role.value, timedelta(hours=1))
+    user = await authenticate_user(form_data.email, form_data.password, db)  # Add await
+    token = create_access_token(
+        user.username, user.id, user.role.value, timedelta(hours=1))
     logger.info(f"User {user.username} logged in successfully")
     return {"access_token": token, "token_type": "bearer"}
+
 
 async def get_active_user(token: Annotated[str, Depends(oauth2_bearer)]):
     try:
@@ -121,7 +133,8 @@ async def get_active_user(token: Annotated[str, Depends(oauth2_bearer)]):
         user_id: int = payload.get("id")
         role: str = payload.get("role")
         if username is None or user_id is None or role is None:
-            raise HTTPException(status_code=401, detail="Could not validate user")
+            raise HTTPException(
+                status_code=401, detail="Could not validate user")
         return {"username": username, "id": user_id, "role": role}
     except jwt.ExpiredSignatureError:
         logger.warning("Token expired")
@@ -130,10 +143,12 @@ async def get_active_user(token: Annotated[str, Depends(oauth2_bearer)]):
         logger.warning("Invalid token")
         raise HTTPException(status_code=401, detail="Invalid token")
 
+
 @router.post("/verify-token", response_model=TokenVerificationResponse, status_code=status.HTTP_200_OK)
 async def verify_token(request_body: TokenVerifyRequest):
     try:
-        payload = jwt.decode(request_body.token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(request_body.token,
+                             SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
         exp_timestamp = float(payload["exp"])
         exp_datetime = datetime.fromtimestamp(exp_timestamp)
@@ -146,6 +161,7 @@ async def verify_token(request_body: TokenVerifyRequest):
         logger.warning("Invalid token during verification")
         raise HTTPException(status_code=401, detail="Invalid token")
 
+
 @router.post("/forgot-password", status_code=status.HTTP_200_OK)
 async def forgot_password(forgot_password_request: ForgotPasswordRequest, db: db_dependency):
     email = forgot_password_request.email
@@ -153,12 +169,14 @@ async def forgot_password(forgot_password_request: ForgotPasswordRequest, db: db
         result = await session.execute(select(Users).filter(Users.email == email))
         user = result.scalars().first()
         if not user:
-            logger.warning(f"Password reset requested for non-existent email: {email}")
+            logger.warning(
+                f"Password reset requested for non-existent email: {email}")
             raise HTTPException(status_code=404, detail="User does not exist")
-        
+
         token_expires = timedelta(hours=1)
-        reset_token = create_access_token(user.username, user.id, user.role.value, token_expires)
-        
+        reset_token = create_access_token(
+            user.username, user.id, user.role.value, token_expires)
+
         message = MessageSchema(
             subject="Password Reset Request",
             recipients=[email],
@@ -171,6 +189,7 @@ async def forgot_password(forgot_password_request: ForgotPasswordRequest, db: db
         logger.info(f"Password reset email sent to: {email}")
         return {"message": "Password reset email sent"}
 
+
 @router.post("/reset-password/{token}", status_code=status.HTTP_200_OK)
 async def reset_password(token: str, reset_password_request: ResetPasswordRequest, db: db_dependency):
     try:
@@ -179,19 +198,23 @@ async def reset_password(token: str, reset_password_request: ResetPasswordReques
         if user_id is None:
             logger.warning("Invalid reset token")
             raise HTTPException(status_code=401, detail="Invalid token")
-        
+
         async with db as session:
             result = await session.execute(select(Users).filter(Users.id == user_id))
             user = result.scalars().first()
             if not user:
-                logger.warning(f"Password reset attempted for non-existent user ID: {user_id}")
-                raise HTTPException(status_code=404, detail="User does not exist")
-            
-            user.hashed_password = bcrypt_context.hash(reset_password_request.new_password)
+                logger.warning(
+                    f"Password reset attempted for non-existent user ID: {user_id}")
+                raise HTTPException(
+                    status_code=404, detail="User does not exist")
+
+            user.hashed_password = bcrypt_context.hash(
+                reset_password_request.new_password)
             session.add(user)
             await session.commit()
             await session.refresh(user)
-            logger.info(f"Password reset successfully for user: {user.username}")
+            logger.info(
+                f"Password reset successfully for user: {user.username}")
             return {"message": "Password has been reset successfully"}
     except jwt.ExpiredSignatureError:
         logger.warning("Expired reset token")
@@ -199,6 +222,7 @@ async def reset_password(token: str, reset_password_request: ResetPasswordReques
     except jwt.DecodeError:
         logger.warning("Invalid reset token")
         raise HTTPException(status_code=401, detail="Invalid token")
+
 
 def create_access_token(username: str, user_id: int, role: str, expires_delta: timedelta):
     encode = {"sub": username, "id": user_id, "role": role}

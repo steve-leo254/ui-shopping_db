@@ -24,6 +24,12 @@ class LoginUserRequest(BaseModel):
     email: EmailStr
     password: str
 
+class User(BaseModel):
+    id: int
+    username: str
+    email: EmailStr
+    role: Role
+
 class Token(BaseModel):
     access_token: str
     token_type: str
@@ -87,6 +93,7 @@ class TokenVerificationResponse(BaseModel):
     username: str
     tokenverification: str
 
+
 class UpdateProduct(BaseModel):
     name: Optional[str]
     price: Optional[float]
@@ -96,7 +103,7 @@ class UpdateProduct(BaseModel):
     barcode: Optional[int]
     category_id: Optional[int]
     brand: Optional[str]
-    description: Optional[str] 
+    description: Optional[str]  # New description field
 
 class PaginatedProductResponse(BaseModel):
     items: List[ProductResponse]
@@ -104,3 +111,7 @@ class PaginatedProductResponse(BaseModel):
     page: int
     limit: int
     pages: int
+
+class ImageResponse(BaseModel):
+    message: str
+    img_url: str
