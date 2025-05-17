@@ -50,7 +50,7 @@ class ProductsBase(BaseModel):
     barcode: int
     category_id: Optional[int]
     brand: Optional[str]
-    description: Optional[str]  # New description field
+    description: Optional[str]  
 
 class ProductResponse(ProductsBase):
     id: int
