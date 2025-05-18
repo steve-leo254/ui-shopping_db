@@ -5,6 +5,7 @@ from pydantic_model import (
 )
 from typing import Annotated, List
 import models
+from fastapi.staticfiles import StaticFiles
 from database import engine, db_dependency  # Use engine from database.py
 from sqlalchemy import select, func, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -61,6 +62,9 @@ def require_admin(user: user_dependency):
 # Ensure uploads directory exists
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
+
+# Serve static files from "uploads"
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 @app.post("/upload-image", response_model=ImageResponse, status_code=status.HTTP_201_CREATED)
 async def upload_image(user: user_dependency, file: UploadFile = File(...)):
