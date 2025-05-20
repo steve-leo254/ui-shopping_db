@@ -24,12 +24,6 @@ class LoginUserRequest(BaseModel):
     email: EmailStr
     password: str
 
-class User(BaseModel):
-    id: int
-    username: str
-    email: EmailStr
-    role: Role
-
 class Token(BaseModel):
     access_token: str
     token_type: str
@@ -50,7 +44,7 @@ class ProductsBase(BaseModel):
     barcode: int
     category_id: Optional[int]
     brand: Optional[str]
-    description: Optional[str]  
+    description: Optional[str]  # New description field
 
 class ProductResponse(ProductsBase):
     id: int
@@ -93,7 +87,6 @@ class TokenVerificationResponse(BaseModel):
     username: str
     tokenverification: str
 
-
 class UpdateProduct(BaseModel):
     name: Optional[str]
     price: Optional[float]
@@ -115,3 +108,16 @@ class PaginatedProductResponse(BaseModel):
 class ImageResponse(BaseModel):
     message: str
     img_url: str
+
+class AddressBase(BaseModel):
+    phone_number: str  
+    street: str
+    county: str
+    region: Optional[str]  
+    postal_code: str  
+    country: str 
+
+class AddressResponse(AddressBase):
+    id: int
+    user_id: int
+    created_at: datetime

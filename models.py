@@ -7,8 +7,6 @@ class Role(enum.Enum):
     ADMIN = "admin"
     CUSTOMER = "customer"
 
-
-
 class OrderStatus(enum.Enum):
     PENDING = "pending"
     PROCESSING = "processing"
@@ -26,6 +24,7 @@ class Users(Base):
     created_at = Column(DateTime, default=func.now())
     orders = relationship("Orders", back_populates="user")
     products = relationship("Products", back_populates="user")
+    addresses = relationship("Addresses", back_populates="user")  # Relationship to Addresses
 
 class Categories(Base):
     __tablename__ = 'categories'
@@ -71,3 +70,16 @@ class OrderDetails(Base):
     total_price = Column(Numeric(precision=15, scale=2))
     product = relationship("Products", back_populates="order_details")
     order = relationship("Orders", back_populates="order_details")
+
+class Addresses(Base):
+    __tablename__ = "addresses"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    phone_number = Column(String(20), nullable=False)  
+    street = Column(String(100), nullable=False)
+    county = Column(String(50), nullable=False)
+    region = Column(String(50), nullable=True)  
+    postal_code = Column(String(20), nullable=False)  
+    country = Column(String(50), nullable=False) 
+    created_at = Column(DateTime, default=func.now())
+    user = relationship("Users", back_populates="addresses")

@@ -1,12 +1,12 @@
-from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File,Query
+from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File, Query
 from pydantic_model import (
     ProductsBase, CartPayload, CartItem, UpdateProduct, CategoryBase, CategoryResponse,
-    ProductResponse, OrderResponse, OrderDetailResponse, Role, PaginatedProductResponse, ImageResponse
+    ProductResponse, OrderResponse, OrderDetailResponse, Role, PaginatedProductResponse, ImageResponse,AddressResponse,AddressBase
 )
 from typing import Annotated, List
 import models
 from fastapi.staticfiles import StaticFiles
-from database import engine, db_dependency  # Use engine from database.py
+from database import engine, db_dependency
 from sqlalchemy import select, func, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
@@ -90,60 +90,27 @@ async def upload_image(user: user_dependency, file: UploadFile = File(...)):
         logger.error(f"Error uploading image: {str(e)}")
         raise HTTPException(status_code=500, detail="Error uploading image")
 
-
-
 @app.get("/public/products", response_model=PaginatedProductResponse, status_code=status.HTTP_200_OK)
-async def browse_products(
-    db: db_dependency,
-    search: str = None,
-    page: int = Query(1, ge=1),
-    limit: int = Query(10, ge=1, le=100),
-    category_id: int | None = Query(None)
-):
+async def browse_products(db: db_dependency, search: str = None, page: int = 1, limit: int = 10):
     try:
         skip = (page - 1) * limit
         query = select(models.Products).options(joinedload(models.Products.category))
         if search:
             query = query.filter(models.Products.name.ilike(f"%{search}%"))
             logger.info(f"Product search query: {search}")
-        if category_id is not None:
-            query = query.filter(models.Products.category_id == category_id)
         
-        # Get total count
+        # Execute count query
         total_result = await db.execute(select(func.count()).select_from(query.subquery()))
-        total = total_result.scalar() or 0
+        total = total_result.scalar_one()
         
-        # Fetch paginated products
-        result = await db.execute(query.offset(skip).limit(limit))
+        # Execute paginated query
+        query = query.offset(skip).limit(limit)
+        result = await db.execute(query)
         products = result.scalars().all()
-        total_pages = ceil(total / limit) if total > 0 else 1
         
-        # Transform response
-        items = [
-            {
-                "id": p.id,
-                "name": p.name,
-                "cost": float(p.cost),
-                "price": float(p.price),
-                "img_url": p.img_url,
-                "stock_quantity": float(p.stock_quantity),
-                "description": p.description,
-                "created_at": p.created_at.isoformat(),
-                "barcode": int(p.barcode) if p.barcode else None,
-                "user_id": p.user_id,
-                "category_id": p.category_id,
-                "brand": p.brand,
-                "category": {
-                    "id": p.category.id,
-                    "name": p.category.name,
-                    "description": p.category.description
-                } if p.category else None
-            }
-            for p in products
-        ]
-        
+        total_pages = ceil(total / limit)
         return {
-            "items": items,
+            "items": products,
             "total": total,
             "page": page,
             "limit": limit,
@@ -152,13 +119,26 @@ async def browse_products(
     except SQLAlchemyError as e:
         logger.error(f"Error fetching products: {str(e)}")
         raise HTTPException(status_code=500, detail="Error fetching products")
-    
 
+@app.get("/public/products/{product_id}", response_model=ProductResponse, status_code=status.HTTP_200_OK)
+async def get_product_by_id(product_id: int, db: db_dependency):
+    try:
+        query = select(models.Products).filter(models.Products.id == product_id).options(joinedload(models.Products.category))
+        result = await db.execute(query)
+        product = result.scalars().first()
+        if not product:
+            logger.info(f"Product not found: ID {product_id}")
+            raise HTTPException(status_code=404, detail="Product not found")
+        return product
+    except SQLAlchemyError as e:
+        logger.error(f"Error fetching product by ID {product_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error fetching product")
 
 @app.get("/public/categories", response_model=List[CategoryResponse], status_code=status.HTTP_200_OK)
 async def browse_categories(db: db_dependency):
     try:
-        result = await db.execute(select(models.Categories))
+        query = select(models.Categories)
+        result = await db.execute(query)
         categories = result.scalars().all()
         return categories
     except SQLAlchemyError as e:
@@ -195,29 +175,27 @@ async def add_product(user: user_dependency, db: db_dependency, create_product: 
         await db.rollback()
         logger.error(f"Error adding product: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-    
 
-
-@app.get("/public/products", response_model=PaginatedProductResponse, status_code=status.HTTP_200_OK)
-async def browse_products(db: db_dependency, search: str = None, page: int = 1, limit: int = 10):
+@app.get("/products", response_model=PaginatedProductResponse, status_code=status.HTTP_200_OK)
+async def fetch_products(user: user_dependency, db: db_dependency, search: str = None, page: int = 1, limit: int = 10):
+    require_admin(user)
     try:
         skip = (page - 1) * limit
-
-        # Query for total count
-        total_query = select(func.count(models.Products.id))
-        if search:
-            total_query = total_query.filter(models.Products.name.ilike(f"%{search}%"))
-        total_result = await db.execute(total_query)
-        total = total_result.scalar() or 0
-
-        # Query for products with eager loading of category
-        query = select(models.Products).options(joinedload(models.Products.category))
+        query = select(models.Products).filter(models.Products.user_id == user.get("id")).options(joinedload(models.Products.category))
         if search:
             query = query.filter(models.Products.name.ilike(f"%{search}%"))
-        result = await db.execute(query.offset(skip).limit(limit))
+            logger.info(f"Admin product search query: {search}")
+        
+        # Execute count query
+        total_result = await db.execute(select(func.count()).select_from(query.subquery()))
+        total = total_result.scalar_one()
+        
+        # Execute paginated query
+        query = query.offset(skip).limit(limit)
+        result = await db.execute(query)
         products = result.scalars().all()
-
-        total_pages = ceil(total / limit) if limit > 0 else 1
+        
+        total_pages = ceil(total / limit)
         return {
             "items": products,
             "total": total,
@@ -229,20 +207,16 @@ async def browse_products(db: db_dependency, search: str = None, page: int = 1, 
         logger.error(f"Error fetching products: {str(e)}")
         raise HTTPException(status_code=500, detail="Error fetching products")
 
-
-
-
 @app.put("/update-product/{product_id}", status_code=status.HTTP_200_OK)
 async def update_product(product_id: int, updated_data: UpdateProduct, user: user_dependency, db: db_dependency):
     require_admin(user)
     try:
-        product = await db.execute(
-            select(models.Products).filter(
-                models.Products.id == product_id,
-                models.Products.user_id == user.get("id")
-            )
-        )
-        product = product.scalar_one_or_none()
+        query = select(models.Products).filter(
+            models.Products.id == product_id,
+            models.Products.user_id == user.get("id")
+        ).options(joinedload(models.Products.category))
+        result = await db.execute(query)
+        product = result.scalars().first()
         if not product:
             raise HTTPException(status_code=404, detail="Product not found")
         update_dict = updated_data.dict(exclude_unset=True)
@@ -255,41 +229,35 @@ async def update_product(product_id: int, updated_data: UpdateProduct, user: use
         await db.rollback()
         logger.error(f"Error updating product: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-    
-
 
 @app.delete("/delete-product/{product_id}", status_code=status.HTTP_200_OK)
 async def delete_product(product_id: int, db: db_dependency, user: user_dependency):
     require_admin(user)
     try:
-        order_details = await db.execute(
-            select(models.OrderDetails).filter(models.OrderDetails.product_id == product_id)
-        )
-        if order_details.scalar_one_or_none():
-            raise HTTPException(status_code=400, detail="Cannot delete product with existing orders")
-        product = await db.execute(
-            select(models.Products).filter(
-                models.Products.id == product_id,
-                models.Products.user_id == user.get("id")
-            )
-        )
-        product = product.scalar_one_or_none()
+        # Check if product exists
+        query = select(models.Products).filter(
+            models.Products.id == product_id,
+            models.Products.user_id == user.get("id")
+        ).options(joinedload(models.Products.category))
+        result = await db.execute(query)
+        product = result.scalars().first()
         if not product:
             raise HTTPException(status_code=404, detail="Product not found")
-        await db.execute(
-            delete(models.Products).filter(
-                models.Products.id == product_id,
-                models.Products.user_id == user.get("id")
-            )
-        )
+        
+        # Check for existing order details
+        order_query = select(models.OrderDetails).filter(models.OrderDetails.product_id == product_id)
+        order_result = await db.execute(order_query)
+        order_details = order_result.scalars().first()
+        if order_details:
+            raise HTTPException(status_code=400, detail="Cannot delete product with existing orders")
+        
+        await db.delete(product)
         await db.commit()
         return {"message": "Product deleted successfully"}
     except SQLAlchemyError as e:
         await db.rollback()
         logger.error(f"Error deleting product: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-    
-
 
 @app.post("/create_order", status_code=status.HTTP_201_CREATED)
 async def create_order(db: db_dependency, user: user_dependency, order_payload: CartPayload):
@@ -301,10 +269,9 @@ async def create_order(db: db_dependency, user: user_dependency, order_payload: 
         
         total_cost = Decimal('0')
         for item in order_payload.cart:
-            product = await db.execute(
-                select(models.Products).filter_by(id=item.id)
-            )
-            product = product.scalar_one_or_none()
+            query = select(models.Products).filter(models.Products.id == item.id).options(joinedload(models.Products.category))
+            result = await db.execute(query)
+            product = result.scalars().first()
             if not product:
                 await db.rollback()
                 raise HTTPException(status_code=404, detail=f"Product ID {item.id} not found")
@@ -339,21 +306,18 @@ async def create_order(db: db_dependency, user: user_dependency, order_payload: 
         await db.rollback()
         logger.error(f"Invalid quantity value: {str(e)}")
         raise HTTPException(status_code=400, detail="Invalid quantity value")
-    
-
 
 @app.get("/orders", response_model=List[OrderResponse], status_code=status.HTTP_200_OK)
 async def fetch_orders(user: user_dependency, db: db_dependency, skip: int = 0, limit: int = 10):
     try:
-        result = await db.execute(
+        query = (
             select(models.Orders)
             .filter(models.Orders.user_id == user.get("id"))
-            .options(
-                joinedload(models.Orders.order_details).joinedload(models.OrderDetails.product)
-            )
+            .options(joinedload(models.Orders.order_details).joinedload(models.OrderDetails.product).joinedload(models.Products.category))
             .offset(skip)
             .limit(limit)
         )
+        result = await db.execute(query)
         orders = result.scalars().all()
         for order in orders:
             for detail in order.order_details:
@@ -363,8 +327,6 @@ async def fetch_orders(user: user_dependency, db: db_dependency, skip: int = 0, 
     except SQLAlchemyError as e:
         logger.error(f"Error fetching orders: {str(e)}")
         raise HTTPException(status_code=500, detail="Error fetching orders")
-    
-
 
 @app.get("/dashboard", status_code=status.HTTP_200_OK)
 async def dashboard(user: user_dependency, db: db_dependency):
@@ -373,23 +335,22 @@ async def dashboard(user: user_dependency, db: db_dependency):
         id = user.get("id")
         today = datetime.utcnow().date()
         
-        total_sales_result = await db.execute(
-            select(func.sum(models.Orders.total)).filter(models.Orders.user_id == id)
-        )
-        total_sales = total_sales_result.scalar() or 0
+        # Total sales
+        total_sales_query = select(func.sum(models.Orders.total)).filter(models.Orders.user_id == id)
+        total_sales_result = await db.execute(total_sales_query)
+        total_sales = total_sales_result.scalar_one_or_none() or 0
         
-        total_products_result = await db.execute(
-            select(func.count(models.Products.id)).filter(models.Products.user_id == id)
-        )
-        total_products = total_products_result.scalar() or 0
+        # Total products
+        total_products_query = select(func.count(models.Products.id)).filter(models.Products.user_id == id)
+        total_products_result = await db.execute(total_products_query)
+        total_products = total_products_result.scalar_one_or_none() or 0
         
-        today_sale_result = await db.execute(
-            select(func.sum(models.Orders.total)).filter(
-                models.Orders.user_id == id,
-                func.date(models.Orders.datetime) == today
-            )
+        # Today's sales
+        today_sale_query = select(func.sum(models.Orders.total)).filter(
+            models.Orders.user_id == id, func.date(models.Orders.datetime) == today
         )
-        today_sale = today_sale_result.scalar() or 0
+        today_sale_result = await db.execute(today_sale_query)
+        today_sale = today_sale_result.scalar_one_or_none() or 0
         
         return {
             "total_sales": float(total_sales),
@@ -399,6 +360,41 @@ async def dashboard(user: user_dependency, db: db_dependency):
     except SQLAlchemyError as e:
         logger.error(f"Error fetching dashboard data: {str(e)}")
         raise HTTPException(status_code=500, detail="Error fetching dashboard data")
+
+
+
+
+
+@app.post("/addresses/", response_model=AddressResponse, status_code=status.HTTP_201_CREATED)
+async def create_address(user: user_dependency, db: db_dependency, address: AddressBase):
+    try:
+        db_address = models.Addresses(
+            **address.dict(),
+            user_id=user.get("id")
+        )
+        db.add(db_address)
+        await db.commit()
+        await db.refresh(db_address)
+        logger.info(f"Address created for user {user.get('id')}")
+        return db_address
+    except SQLAlchemyError as e:
+        await db.rollback()
+        logger.error(f"Error creating address: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error creating address")
+
+
+
+@app.get("/addresses/", response_model=List[AddressResponse], status_code=status.HTTP_200_OK)
+async def fetch_addresses(user: user_dependency, db: db_dependency):
+    try:
+        query = select(models.Addresses).filter(models.Addresses.user_id == user.get("id"))
+        result = await db.execute(query)
+        addresses = result.scalars().all()
+        return addresses
+    except SQLAlchemyError as e:
+        logger.error(f"Error fetching addresses: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error fetching addresses")
+
 
 if __name__ == "__main__":
     import uvicorn
