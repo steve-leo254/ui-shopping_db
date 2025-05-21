@@ -1,16 +1,16 @@
-from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File, Query
+from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File
 from pydantic_model import (
     ProductsBase, CartPayload, CartItem, UpdateProduct, CategoryBase, CategoryResponse,
-    ProductResponse, OrderResponse, OrderDetailResponse, Role, PaginatedProductResponse, ImageResponse,AddressResponse,AddressBase
+    ProductResponse, OrderResponse, OrderDetailResponse, Role, PaginatedProductResponse,
+    ImageResponse, AddressCreate, AddressResponse 
 )
 from typing import Annotated, List
 import models
-from fastapi.staticfiles import StaticFiles
 from database import engine, db_dependency
-from sqlalchemy import select, func, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import SQLAlchemyError,IntegrityError
+from sqlalchemy import select, func, update
 from sqlalchemy.orm import joinedload
-from sqlalchemy.exc import SQLAlchemyError
 import auth
 from auth import get_active_user
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,6 +22,7 @@ from decimal import Decimal
 from math import ceil
 import uuid
 from pathlib import Path
+from fastapi.staticfiles import StaticFiles
 import asyncio
 
 load_dotenv()
@@ -40,17 +41,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Async schema creation
-async def init_db():
-    async with engine.begin() as conn:
-        await conn.run_sync(models.Base.metadata.create_all)
-
-# Run init_db on startup
-@app.on_event("startup")
-async def startup_event():
-    logger.info("Initializing database schema...")
-    await init_db()
-    logger.info("Database schema initialized.")
+UPLOAD_DIR = Path("uploads")
+UPLOAD_DIR.mkdir(exist_ok=True)
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 user_dependency = Annotated[dict, Depends(get_active_user)]
 
@@ -59,12 +52,15 @@ def require_admin(user: user_dependency):
         raise HTTPException(status_code=403, detail="Admin access required")
     return user
 
-# Ensure uploads directory exists
-UPLOAD_DIR = Path("uploads")
-UPLOAD_DIR.mkdir(exist_ok=True)
+async def init_db():
+    async with engine.begin() as conn:
+        await conn.run_sync(models.Base.metadata.create_all)
+    logger.info("Database tables created successfully")
 
-# Serve static files from "uploads"
-app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+@app.on_event("startup")
+async def on_startup():
+    await init_db()
+
 
 @app.post("/upload-image", response_model=ImageResponse, status_code=status.HTTP_201_CREATED)
 async def upload_image(user: user_dependency, file: UploadFile = File(...)):
@@ -89,6 +85,7 @@ async def upload_image(user: user_dependency, file: UploadFile = File(...)):
     except Exception as e:
         logger.error(f"Error uploading image: {str(e)}")
         raise HTTPException(status_code=500, detail="Error uploading image")
+    
 
 @app.get("/public/products", response_model=PaginatedProductResponse, status_code=status.HTTP_200_OK)
 async def browse_products(db: db_dependency, search: str = None, page: int = 1, limit: int = 10):
@@ -99,11 +96,12 @@ async def browse_products(db: db_dependency, search: str = None, page: int = 1, 
             query = query.filter(models.Products.name.ilike(f"%{search}%"))
             logger.info(f"Product search query: {search}")
         
-        # Execute count query
-        total_result = await db.execute(select(func.count()).select_from(query.subquery()))
-        total = total_result.scalar_one()
+        count_query = select(func.count()).select_from(models.Products)
+        if search:
+            count_query = count_query.filter(models.Products.name.ilike(f"%{search}%"))
+        count_result = await db.execute(count_query)
+        total = count_result.scalar()
         
-        # Execute paginated query
         query = query.offset(skip).limit(limit)
         result = await db.execute(query)
         products = result.scalars().all()
@@ -123,8 +121,11 @@ async def browse_products(db: db_dependency, search: str = None, page: int = 1, 
 @app.get("/public/products/{product_id}", response_model=ProductResponse, status_code=status.HTTP_200_OK)
 async def get_product_by_id(product_id: int, db: db_dependency):
     try:
-        query = select(models.Products).filter(models.Products.id == product_id).options(joinedload(models.Products.category))
-        result = await db.execute(query)
+        result = await db.execute(
+            select(models.Products)
+            .filter(models.Products.id == product_id)
+            .options(joinedload(models.Products.category))
+        )
         product = result.scalars().first()
         if not product:
             logger.info(f"Product not found: ID {product_id}")
@@ -137,8 +138,7 @@ async def get_product_by_id(product_id: int, db: db_dependency):
 @app.get("/public/categories", response_model=List[CategoryResponse], status_code=status.HTTP_200_OK)
 async def browse_categories(db: db_dependency):
     try:
-        query = select(models.Categories)
-        result = await db.execute(query)
+        result = await db.execute(select(models.Categories))
         categories = result.scalars().all()
         return categories
     except SQLAlchemyError as e:
@@ -185,16 +185,14 @@ async def fetch_products(user: user_dependency, db: db_dependency, search: str =
         if search:
             query = query.filter(models.Products.name.ilike(f"%{search}%"))
             logger.info(f"Admin product search query: {search}")
-        
-        # Execute count query
-        total_result = await db.execute(select(func.count()).select_from(query.subquery()))
-        total = total_result.scalar_one()
-        
-        # Execute paginated query
+        count_query = select(func.count()).select_from(models.Products).filter(models.Products.user_id == user.get("id"))
+        if search:
+            count_query = count_query.filter(models.Products.name.ilike(f"%{search}%"))
+        count_result = await db.execute(count_query)
+        total = count_result.scalar()
         query = query.offset(skip).limit(limit)
         result = await db.execute(query)
         products = result.scalars().all()
-        
         total_pages = ceil(total / limit)
         return {
             "items": products,
@@ -211,11 +209,11 @@ async def fetch_products(user: user_dependency, db: db_dependency, search: str =
 async def update_product(product_id: int, updated_data: UpdateProduct, user: user_dependency, db: db_dependency):
     require_admin(user)
     try:
-        query = select(models.Products).filter(
-            models.Products.id == product_id,
-            models.Products.user_id == user.get("id")
-        ).options(joinedload(models.Products.category))
-        result = await db.execute(query)
+        result = await db.execute(
+            select(models.Products)
+            .filter(models.Products.id == product_id, models.Products.user_id == user.get("id"))
+            .options(joinedload(models.Products.category))
+        )
         product = result.scalars().first()
         if not product:
             raise HTTPException(status_code=404, detail="Product not found")
@@ -234,23 +232,17 @@ async def update_product(product_id: int, updated_data: UpdateProduct, user: use
 async def delete_product(product_id: int, db: db_dependency, user: user_dependency):
     require_admin(user)
     try:
-        # Check if product exists
-        query = select(models.Products).filter(
-            models.Products.id == product_id,
-            models.Products.user_id == user.get("id")
-        ).options(joinedload(models.Products.category))
-        result = await db.execute(query)
+        result = await db.execute(
+            select(models.Products)
+            .filter(models.Products.id == product_id, models.Products.user_id == user.get("id"))
+        )
         product = result.scalars().first()
         if not product:
             raise HTTPException(status_code=404, detail="Product not found")
-        
-        # Check for existing order details
-        order_query = select(models.OrderDetails).filter(models.OrderDetails.product_id == product_id)
-        order_result = await db.execute(order_query)
-        order_details = order_result.scalars().first()
+        result = await db.execute(select(models.OrderDetails).filter(models.OrderDetails.product_id == product_id))
+        order_details = result.scalars().first()
         if order_details:
             raise HTTPException(status_code=400, detail="Cannot delete product with existing orders")
-        
         await db.delete(product)
         await db.commit()
         return {"message": "Product deleted successfully"}
@@ -269,8 +261,7 @@ async def create_order(db: db_dependency, user: user_dependency, order_payload: 
         
         total_cost = Decimal('0')
         for item in order_payload.cart:
-            query = select(models.Products).filter(models.Products.id == item.id).options(joinedload(models.Products.category))
-            result = await db.execute(query)
+            result = await db.execute(select(models.Products).filter_by(id=item.id).options(joinedload(models.Products.category)))
             product = result.scalars().first()
             if not product:
                 await db.rollback()
@@ -310,14 +301,11 @@ async def create_order(db: db_dependency, user: user_dependency, order_payload: 
 @app.get("/orders", response_model=List[OrderResponse], status_code=status.HTTP_200_OK)
 async def fetch_orders(user: user_dependency, db: db_dependency, skip: int = 0, limit: int = 10):
     try:
-        query = (
+        result = await db.execute(
             select(models.Orders)
             .filter(models.Orders.user_id == user.get("id"))
-            .options(joinedload(models.Orders.order_details).joinedload(models.OrderDetails.product).joinedload(models.Products.category))
-            .offset(skip)
-            .limit(limit)
+            .options(joinedload(models.Orders.order_details).joinedload(models.OrderDetails.product))
         )
-        result = await db.execute(query)
         orders = result.scalars().all()
         for order in orders:
             for detail in order.order_details:
@@ -335,22 +323,20 @@ async def dashboard(user: user_dependency, db: db_dependency):
         id = user.get("id")
         today = datetime.utcnow().date()
         
-        # Total sales
-        total_sales_query = select(func.sum(models.Orders.total)).filter(models.Orders.user_id == id)
-        total_sales_result = await db.execute(total_sales_query)
-        total_sales = total_sales_result.scalar_one_or_none() or 0
-        
-        # Total products
-        total_products_query = select(func.count(models.Products.id)).filter(models.Products.user_id == id)
-        total_products_result = await db.execute(total_products_query)
-        total_products = total_products_result.scalar_one_or_none() or 0
-        
-        # Today's sales
-        today_sale_query = select(func.sum(models.Orders.total)).filter(
-            models.Orders.user_id == id, func.date(models.Orders.datetime) == today
+        result = await db.execute(
+            select(func.sum(models.Orders.total)).filter(models.Orders.user_id == id)
         )
-        today_sale_result = await db.execute(today_sale_query)
-        today_sale = today_sale_result.scalar_one_or_none() or 0
+        total_sales = result.scalar() or 0
+        result = await db.execute(
+            select(func.count(models.Products.id)).filter(models.Products.user_id == id)
+        )
+        total_products = result.scalar() or 0
+        result = await db.execute(
+            select(func.sum(models.Orders.total)).filter(
+                models.Orders.user_id == id, func.date(models.Orders.datetime) == today
+            )
+        )
+        today_sale = result.scalar() or 0
         
         return {
             "total_sales": float(total_sales),
@@ -363,35 +349,93 @@ async def dashboard(user: user_dependency, db: db_dependency):
 
 
 
-@app.post("/addresses/", response_model=AddressResponse, status_code=status.HTTP_201_CREATED)
-async def create_address(user: user_dependency, db: db_dependency, address: AddressBase):
+@app.post("/addresses", response_model=AddressResponse, status_code=status.HTTP_201_CREATED)
+async def create_address(user: user_dependency, db: db_dependency, address: AddressCreate):
     try:
-        db_address = models.Addresses(
+        user_id = user.get("id")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid user authentication")
+
+        # Unset other default addresses if this is default
+        if getattr(address, "is_default", False):  # Check if is_default exists and is True
+            stmt = update(models.Address).where(
+                models.Address.user_id == user_id,
+                models.Address.is_default == True
+            ).values(is_default=False)
+            await db.execute(stmt)
+            await db.commit()
+
+        # Create new address
+        db_address = models.Address(
             **address.dict(),
-            user_id=user.get("id")
+            user_id=user_id,
+            created_at=datetime.utcnow()  # Explicitly set created_at
         )
         db.add(db_address)
         await db.commit()
         await db.refresh(db_address)
-        logger.info(f"Address created for user {user.get('id')}")
-        return db_address   
+
+        logger.info(f"Address created for user {user_id}: Address ID {db_address.id}")
+        return db_address
+
+    except IntegrityError as e:
+        await db.rollback()
+        logger.error(f"Integrity error creating address: {str(e)}")
+        raise HTTPException(status_code=400, detail="Address already exists or invalid data")
     except SQLAlchemyError as e:
         await db.rollback()
-        logger.error(f"Error creating address: {str(e)}")
-        raise HTTPException(status_code=500, detail="Error creating address")
-    
+        logger.error(f"Database error creating address: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@app.get("/addresses/", response_model=List[AddressResponse], status_code=status.HTTP_200_OK)
-async def fetch_addresses(user: user_dependency, db: db_dependency):
+@app.get("/addresses", response_model=List[AddressResponse], status_code=status.HTTP_200_OK)
+async def get_addresses(user: user_dependency, db: db_dependency):
     try:
-        query = select(models.Addresses).filter(models.Addresses.user_id == user.get("id"))
-        result = await db.execute(query)
+        result = await db.execute(
+            select(models.Address).filter(models.Address.user_id == user.get("id"))
+        )
         addresses = result.scalars().all()
+        if not addresses:
+            logger.info(f"No addresses found for user {user.get('id')}")
+            return []
+        logger.info(f"Retrieved {len(addresses)} addresses for user {user.get('id')}")
         return addresses
     except SQLAlchemyError as e:
         logger.error(f"Error fetching addresses: {str(e)}")
         raise HTTPException(status_code=500, detail="Error fetching addresses")
+
+
+
+
+@app.delete("/addresses/{address_id}", status_code=status.HTTP_200_OK)
+async def delete_address(address_id: int, user: user_dependency, db: db_dependency):
+    try:
+        result = await db.execute(
+            select(models.Addresses).filter(
+                models.Addresses.id == address_id,
+                models.Addresses.user_id == user.get("id")
+            ).options(joinedload(models.Addresses.orders))
+        )
+        address = result.scalars().first()
+        if not address:
+            logger.info(f"Address not found: ID {address_id} for user {user.get('id')}")
+            raise HTTPException(status_code=404, detail="Address not found")
+        
+        if address.orders:
+            logger.info(f"Cannot delete address {address_id}: used in {len(address.orders)} orders")
+            raise HTTPException(status_code=400, detail="Cannot delete address used in orders")
+        
+        await db.delete(address)
+        await db.commit()
+        logger.info(f"Address {address_id} deleted by user {user.get('id')}")
+        return {"message": "Address deleted successfully"}
+    except SQLAlchemyError as e:
+        await db.rollback()
+        logger.error(f"Error deleting address {address_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error deleting address")
+
+
+
 
 
 if __name__ == "__main__":

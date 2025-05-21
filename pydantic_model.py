@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr , validator
+from pydantic import BaseModel, EmailStr
 from datetime import datetime
 from typing import List, Optional
 from enum import Enum
@@ -109,22 +109,22 @@ class ImageResponse(BaseModel):
     message: str
     img_url: str
 
-class AddressBase(BaseModel):
-    
-    phone_number: str  
-    street: str
-    county: str
-    region: Optional[str]  
-    postal_code: str  
-    country: str 
 
-    @validator("phone_number")
-    def validate_phone_number(cls, v):
-        if not v.startswith("+254") or len(v) != 13 or not v[1:].isdigit():
-            raise ValueError("Phone number must be in format +254XXXXXXXXX")
-        return v
+class AddressBase(BaseModel):
+    phone_number: str
+    street: str
+    city: str
+    postal_code: str
+    country: str
+    is_default: bool = False
+
+class AddressCreate(AddressBase):
+    pass
 
 class AddressResponse(AddressBase):
     id: int
     user_id: int
     created_at: datetime
+    
+    class Config:
+        from_attributes = True

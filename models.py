@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, func, DateTime, Numeric, ForeignKey, Enum
+from sqlalchemy import Column, Integer, String, func, DateTime, Numeric, ForeignKey, Enum, Boolean
 from database import Base
 from sqlalchemy.orm import relationship
 import enum
@@ -24,7 +24,7 @@ class Users(Base):
     created_at = Column(DateTime, default=func.now())
     orders = relationship("Orders", back_populates="user")
     products = relationship("Products", back_populates="user")
-    addresses = relationship("Addresses", back_populates="user")  # Relationship to Addresses
+    addresses = relationship("Address", back_populates="user")
 
 class Categories(Base):
     __tablename__ = 'categories'
@@ -58,8 +58,10 @@ class Orders(Base):
     datetime = Column(DateTime, default=func.now(), index=True)
     status = Column(Enum(OrderStatus), default=OrderStatus.PENDING, nullable=False)
     user_id = Column(Integer, ForeignKey('users.id'))
+    address_id = Column(Integer, ForeignKey('addresses.id'), nullable=True)
     user = relationship("Users", back_populates="orders")
     order_details = relationship("OrderDetails", back_populates="order")
+    address = relationship("Address")
 
 class OrderDetails(Base):
     __tablename__ = "order_details"
@@ -71,15 +73,17 @@ class OrderDetails(Base):
     product = relationship("Products", back_populates="order_details")
     order = relationship("Orders", back_populates="order_details")
 
-class Addresses(Base):
-    __tablename__ = "addresses"
+class Address(Base):
+    __tablename__ = 'addresses'
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    phone_number = Column(String(20), nullable=False)  
-    street = Column(String(100), nullable=False)
-    county = Column(String(50), nullable=False)
-    region = Column(String(50), nullable=True)  
-    postal_code = Column(String(20), nullable=False)  
-    country = Column(String(50), nullable=False) 
+    phone_number = Column(String(20), nullable=False)
+    street = Column(String(200), nullable=False)
+    city = Column(String(100), nullable=False)
+    postal_code = Column(String(20), nullable=False)
+    country = Column(String(100), nullable=False)
+    is_default = Column(Boolean, default=False, nullable=False)
+    user_id = Column(Integer, ForeignKey('users.id'))
     created_at = Column(DateTime, default=func.now())
+    
     user = relationship("Users", back_populates="addresses")
+    orders = relationship("Orders", back_populates="address")  
