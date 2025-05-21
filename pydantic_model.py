@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr , validator
 from datetime import datetime
 from typing import List, Optional
 from enum import Enum
@@ -116,6 +116,12 @@ class AddressBase(BaseModel):
     region: Optional[str]  
     postal_code: str  
     country: str 
+
+    @validator("phone_number")
+    def validate_phone_number(cls, v):
+        if not v.startswith("+254") or len(v) != 13 or not v[1:].isdigit():
+            raise ValueError("Phone number must be in format +254XXXXXXXXX")
+        return v
 
 class AddressResponse(AddressBase):
     id: int

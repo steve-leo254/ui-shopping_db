@@ -381,7 +381,7 @@ async def create_address(user: user_dependency, db: db_dependency, address: Addr
         await db.rollback()
         logger.error(f"Error creating address: {str(e)}")
         raise HTTPException(status_code=500, detail="Error creating address")
-
+    
 
 
 @app.get("/addresses/", response_model=List[AddressResponse], status_code=status.HTTP_200_OK)
