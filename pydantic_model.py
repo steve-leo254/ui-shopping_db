@@ -110,6 +110,7 @@ class ImageResponse(BaseModel):
     img_url: str
 
 class AddressBase(BaseModel):
+    
     phone_number: str  
     street: str
     county: str

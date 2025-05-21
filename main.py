@@ -363,8 +363,6 @@ async def dashboard(user: user_dependency, db: db_dependency):
 
 
 
-
-
 @app.post("/addresses/", response_model=AddressResponse, status_code=status.HTTP_201_CREATED)
 async def create_address(user: user_dependency, db: db_dependency, address: AddressBase):
     try:
@@ -376,7 +374,7 @@ async def create_address(user: user_dependency, db: db_dependency, address: Addr
         await db.commit()
         await db.refresh(db_address)
         logger.info(f"Address created for user {user.get('id')}")
-        return db_address
+        return db_address   
     except SQLAlchemyError as e:
         await db.rollback()
         logger.error(f"Error creating address: {str(e)}")
