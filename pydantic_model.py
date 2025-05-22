@@ -128,3 +128,18 @@ class AddressResponse(AddressBase):
     
     class Config:
         from_attributes = True
+
+
+class OrderItemCreate(BaseModel):
+    product_id: int
+    quantity: float
+    unit_price: float
+
+class OrderCreate(BaseModel):
+    delivery_address_id: int
+    billing_address_id: int
+    payment_method: str
+    subtotal: float
+    shipping_fee: float
+    total: float
+    items: List[OrderItemCreate]

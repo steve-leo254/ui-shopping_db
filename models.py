@@ -41,7 +41,7 @@ class Products(Base):
     price = Column(Numeric(precision=14, scale=2), nullable=False)
     img_url = Column(String(200), nullable=True)
     stock_quantity = Column(Numeric(precision=14, scale=2), nullable=False)
-    description = Column(String(200), nullable=True)  # New description field
+    description = Column(String(200), nullable=True) 
     created_at = Column(DateTime, default=func.now())
     barcode = Column(Numeric(precision=12), unique=True)
     user_id = Column(Integer, ForeignKey('users.id'))
@@ -51,27 +51,7 @@ class Products(Base):
     category = relationship("Categories", back_populates="products")
     order_details = relationship("OrderDetails", back_populates="product")
 
-class Orders(Base):
-    __tablename__ = "orders"
-    order_id = Column(Integer, primary_key=True, index=True)
-    total = Column(Numeric(precision=14, scale=2))
-    datetime = Column(DateTime, default=func.now(), index=True)
-    status = Column(Enum(OrderStatus), default=OrderStatus.PENDING, nullable=False)
-    user_id = Column(Integer, ForeignKey('users.id'))
-    address_id = Column(Integer, ForeignKey('addresses.id'), nullable=True)
-    user = relationship("Users", back_populates="orders")
-    order_details = relationship("OrderDetails", back_populates="order")
-    address = relationship("Address")
 
-class OrderDetails(Base):
-    __tablename__ = "order_details"
-    order_detail_id = Column(Integer, primary_key=True)
-    order_id = Column(Integer, ForeignKey("orders.order_id"))
-    product_id = Column(Integer, ForeignKey("products.id"))
-    quantity = Column(Numeric(precision=15, scale=2))
-    total_price = Column(Numeric(precision=15, scale=2))
-    product = relationship("Products", back_populates="order_details")
-    order = relationship("Orders", back_populates="order_details")
 
 class Address(Base):
     __tablename__ = 'addresses'
@@ -86,4 +66,37 @@ class Address(Base):
     created_at = Column(DateTime, default=func.now())
     
     user = relationship("Users", back_populates="addresses")
-    orders = relationship("Orders", back_populates="address")  
+    orders_delivery = relationship("Orders", foreign_keys="Orders.delivery_address_id", back_populates="delivery_address") 
+    orders_billing = relationship("Orders", foreign_keys="Orders.billing_address_id", back_populates="billing_address")  
+
+
+class Orders(Base):
+    __tablename__ = "orders"
+    id = Column(Integer, primary_key=True, index=True)
+    order_number = Column(String(50), unique=True, nullable=False)  
+    subtotal = Column(Numeric(precision=14, scale=2), nullable=False)  
+    shipping_fee = Column(Numeric(precision=14, scale=2), nullable=False)  
+    total = Column(Numeric(precision=14, scale=2), nullable=False)  
+    datetime = Column(DateTime, default=func.now(), index=True)
+    status = Column(Enum(OrderStatus), default=OrderStatus.PENDING, nullable=False)
+    payment_method = Column(String(100), nullable=False)  
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    delivery_address_id = Column(Integer, ForeignKey('addresses.id'), nullable=False)  
+    billing_address_id = Column(Integer, ForeignKey('addresses.id'), nullable=False)  
+
+    user = relationship("Users", back_populates="orders")
+    order_details = relationship("OrderDetails", back_populates="order")
+    delivery_address = relationship("Address", foreign_keys=[delivery_address_id], back_populates="orders_delivery")  
+    billing_address = relationship("Address", foreign_keys=[billing_address_id], back_populates="orders_billing")
+
+class OrderDetails(Base):
+    __tablename__ = "order_details"
+    id = Column(Integer, primary_key=True)
+    order_id = Column(Integer, ForeignKey("orders.id"))
+    product_id = Column(Integer, ForeignKey("products.id"))
+    quantity = Column(Numeric(precision=15, scale=2), nullable=False)
+    unit_price = Column(Numeric(precision=14, scale=2), nullable=False) 
+    total_price = Column(Numeric(precision=15, scale=2), nullable=False) 
+    
+    product = relationship("Products", back_populates="order_details")
+    order = relationship("Orders", back_populates="order_details")

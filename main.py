@@ -2,13 +2,13 @@ from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File
 from pydantic_model import (
     ProductsBase, CartPayload, CartItem, UpdateProduct, CategoryBase, CategoryResponse,
     ProductResponse, OrderResponse, OrderDetailResponse, Role, PaginatedProductResponse,
-    ImageResponse, AddressCreate, AddressResponse 
+    ImageResponse, AddressCreate, AddressResponse,OrderCreate
 )
 from typing import Annotated, List
 import models
 from database import engine, db_dependency
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.exc import SQLAlchemyError,IntegrityError
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from sqlalchemy import select, func, update
 from sqlalchemy.orm import joinedload
 import auth
@@ -23,7 +23,7 @@ from math import ceil
 import uuid
 from pathlib import Path
 from fastapi.staticfiles import StaticFiles
-import asyncio
+import random
 
 load_dotenv()
 
@@ -61,7 +61,6 @@ async def init_db():
 async def on_startup():
     await init_db()
 
-
 @app.post("/upload-image", response_model=ImageResponse, status_code=status.HTTP_201_CREATED)
 async def upload_image(user: user_dependency, file: UploadFile = File(...)):
     require_admin(user)
@@ -85,7 +84,6 @@ async def upload_image(user: user_dependency, file: UploadFile = File(...)):
     except Exception as e:
         logger.error(f"Error uploading image: {str(e)}")
         raise HTTPException(status_code=500, detail="Error uploading image")
-    
 
 @app.get("/public/products", response_model=PaginatedProductResponse, status_code=status.HTTP_200_OK)
 async def browse_products(db: db_dependency, search: str = None, page: int = 1, limit: int = 10):
@@ -251,53 +249,6 @@ async def delete_product(product_id: int, db: db_dependency, user: user_dependen
         logger.error(f"Error deleting product: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/create_order", status_code=status.HTTP_201_CREATED)
-async def create_order(db: db_dependency, user: user_dependency, order_payload: CartPayload):
-    try:
-        new_order = models.Orders(user_id=user.get("id"), total=0)
-        db.add(new_order)
-        await db.commit()
-        await db.refresh(new_order)
-        
-        total_cost = Decimal('0')
-        for item in order_payload.cart:
-            result = await db.execute(select(models.Products).filter_by(id=item.id).options(joinedload(models.Products.category)))
-            product = result.scalars().first()
-            if not product:
-                await db.rollback()
-                raise HTTPException(status_code=404, detail=f"Product ID {item.id} not found")
-            quantity = Decimal(str(item.quantity))
-            if product.stock_quantity < quantity:
-                await db.rollback()
-                raise HTTPException(status_code=400, detail=f"Insufficient stock for product {product.name}")
-            
-            order_detail = models.OrderDetails(
-                order_id=new_order.order_id,
-                product_id=product.id,
-                quantity=quantity,
-                total_price=product.price * quantity,
-            )
-            total_cost += order_detail.total_price
-            product.stock_quantity -= quantity
-            db.add(order_detail)
-        
-        new_order.total = total_cost
-        await db.commit()
-        
-        logger.info(f"Order {new_order.order_id} created for user {user.get('id')}")
-        return {
-            "message": "Order created successfully",
-            "order_id": new_order.order_id,
-        }
-    except SQLAlchemyError as e:
-        await db.rollback()
-        logger.error(f"Error creating order: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-    except ValueError as e:
-        await db.rollback()
-        logger.error(f"Invalid quantity value: {str(e)}")
-        raise HTTPException(status_code=400, detail="Invalid quantity value")
-
 @app.get("/orders", response_model=List[OrderResponse], status_code=status.HTTP_200_OK)
 async def fetch_orders(user: user_dependency, db: db_dependency, skip: int = 0, limit: int = 10):
     try:
@@ -347,8 +298,6 @@ async def dashboard(user: user_dependency, db: db_dependency):
         logger.error(f"Error fetching dashboard data: {str(e)}")
         raise HTTPException(status_code=500, detail="Error fetching dashboard data")
 
-
-
 @app.post("/addresses", response_model=AddressResponse, status_code=status.HTTP_201_CREATED)
 async def create_address(user: user_dependency, db: db_dependency, address: AddressCreate):
     try:
@@ -357,7 +306,7 @@ async def create_address(user: user_dependency, db: db_dependency, address: Addr
             raise HTTPException(status_code=401, detail="Invalid user authentication")
 
         # Unset other default addresses if this is default
-        if getattr(address, "is_default", False):  # Check if is_default exists and is True
+        if getattr(address, "is_default", False):
             stmt = update(models.Address).where(
                 models.Address.user_id == user_id,
                 models.Address.is_default == True
@@ -369,7 +318,7 @@ async def create_address(user: user_dependency, db: db_dependency, address: Addr
         db_address = models.Address(
             **address.dict(),
             user_id=user_id,
-            created_at=datetime.utcnow()  # Explicitly set created_at
+            created_at=datetime.utcnow()
         )
         db.add(db_address)
         await db.commit()
@@ -377,7 +326,6 @@ async def create_address(user: user_dependency, db: db_dependency, address: Addr
 
         logger.info(f"Address created for user {user_id}: Address ID {db_address.id}")
         return db_address
-
     except IntegrityError as e:
         await db.rollback()
         logger.error(f"Integrity error creating address: {str(e)}")
@@ -386,7 +334,6 @@ async def create_address(user: user_dependency, db: db_dependency, address: Addr
         await db.rollback()
         logger.error(f"Database error creating address: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
-
 
 @app.get("/addresses", response_model=List[AddressResponse], status_code=status.HTTP_200_OK)
 async def get_addresses(user: user_dependency, db: db_dependency):
@@ -404,17 +351,14 @@ async def get_addresses(user: user_dependency, db: db_dependency):
         logger.error(f"Error fetching addresses: {str(e)}")
         raise HTTPException(status_code=500, detail="Error fetching addresses")
 
-
-
-
 @app.delete("/addresses/{address_id}", status_code=status.HTTP_200_OK)
 async def delete_address(address_id: int, user: user_dependency, db: db_dependency):
     try:
         result = await db.execute(
-            select(models.Addresses).filter(
-                models.Addresses.id == address_id,
-                models.Addresses.user_id == user.get("id")
-            ).options(joinedload(models.Addresses.orders))
+            select(models.Address).filter(
+                models.Address.id == address_id,
+                models.Address.user_id == user.get("id")
+            ).options(joinedload(models.Address.orders))
         )
         address = result.scalars().first()
         if not address:
@@ -434,8 +378,121 @@ async def delete_address(address_id: int, user: user_dependency, db: db_dependen
         logger.error(f"Error deleting address {address_id}: {str(e)}")
         raise HTTPException(status_code=500, detail="Error deleting address")
 
+def generate_order_number():
+    timestamp = int(datetime.utcnow().timestamp())
+    random_digits = random.randint(1000, 9999)
+    return f"#{timestamp}{random_digits}"
 
 
+@app.post("/orders/", status_code=status.HTTP_201_CREATED)
+async def create_order(order_data: OrderCreate, db: db_dependency, user: user_dependency):
+    try:
+        # Validate delivery address
+        delivery_address_result = await db.execute(
+            select(models.Address).filter(
+                models.Address.id == order_data.delivery_address_id,
+                models.Address.user_id == user.get("id")
+            )
+        )
+        delivery_address = delivery_address_result.scalars().first()
+        if not delivery_address:
+            raise HTTPException(status_code=404, detail="Delivery address not found")
+
+        # Validate billing address
+        billing_address_result = await db.execute(
+            select(models.Address).filter(
+                models.Address.id == order_data.billing_address_id,
+                models.Address.user_id == user.get("id")
+            )
+        )
+        billing_address = billing_address_result.scalars().first()
+        if not billing_address:
+            raise HTTPException(status_code=404, detail="Billing address not found")
+
+        # Validate payment method
+        allowed_payment_methods = ["credit_card", "payment_on_delivery", "mpesa"]
+        if order_data.payment_method not in allowed_payment_methods:
+            raise HTTPException(status_code=400, detail="Invalid payment method")
+
+        # Start transaction
+        total_cost = Decimal(str(order_data.total))
+        db_order = models.Orders(
+            order_number=generate_order_number(),
+            user_id=user.get("id"),
+            delivery_address_id=order_data.delivery_address_id,
+            billing_address_id=order_data.billing_address_id,
+            payment_method=order_data.payment_method,
+            subtotal=Decimal(str(order_data.subtotal)),
+            shipping_fee=Decimal(str(order_data.shipping_fee)),
+            total=total_cost,
+            status="pending",
+            datetime=datetime.utcnow()
+        )
+        db.add(db_order)
+        await db.flush()
+
+        # Create and validate OrderDetails
+        for item in order_data.items:
+            product_result = await db.execute(
+                select(models.Products).filter(models.Products.id == item.product_id)
+            )
+            product = product_result.scalars().first()
+            if not product:
+                await db.rollback()
+                raise HTTPException(status_code=404, detail=f"Product ID {item.product_id} not found")
+            quantity = Decimal(str(item.quantity))
+            if product.stock_quantity < quantity:
+                await db.rollback()
+                raise HTTPException(status_code=400, detail=f"Insufficient stock for product {product.name}")
+
+            db_order_detail = models.OrderDetails(
+                order_id=db_order.order_id,
+                product_id=item.product_id,
+                quantity=quantity,
+                unit_price=Decimal(str(item.unit_price)),
+                total_price=Decimal(str(item.unit_price)) * quantity
+            )
+            product.stock_quantity -= quantity
+            db.add(db_order_detail)
+
+        await db.commit()
+        await db.refresh(db_order)
+        logger.info(f"Order {db_order.order_id} created for user {user.get('id')}")
+        return {"order_id": db_order.order_id}
+    except ValueError as e:
+        await db.rollback()
+        logger.error(f"Invalid data value: {str(e)}")
+        raise HTTPException(status_code=400, detail="Invalid data value")
+    except SQLAlchemyError as e:
+        await db.rollback()
+        logger.error(f"Database error creating order: {str(e)}")
+        raise HTTPException(status_code=500, detail="Database error")
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Unexpected error creating order: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
+
+@app.get("/orders/{order_id}", response_model=OrderResponse, status_code=status.HTTP_200_OK)
+async def get_order(order_id: int, db: db_dependency, user: user_dependency):
+    try:
+        result = await db.execute(
+            select(models.Orders)
+            .filter(models.Orders.order_id == order_id, models.Orders.user_id == user.get("id"))
+            .options(
+                joinedload(models.Orders.order_details).joinedload(models.OrderDetails.product),
+                joinedload(models.Orders.delivery_address),
+                joinedload(models.Orders.billing_address)
+            )
+        )
+        order = result.scalars().first()
+        if not order:
+            logger.info(f"Order not found: ID {order_id} for user {user.get('id')}")
+            raise HTTPException(status_code=404, detail="Order not found")
+        return order
+    except SQLAlchemyError as e:
+        logger.error(f"Error fetching order {order_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error fetching order")
 
 
 if __name__ == "__main__":
