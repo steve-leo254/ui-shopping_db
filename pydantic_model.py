@@ -110,12 +110,15 @@ class ImageResponse(BaseModel):
     img_url: str
 
 
+
 class AddressBase(BaseModel):
+    first_name: str
+    last_name: str
     phone_number: str
-    street: str
-    city: str
-    postal_code: str
-    country: str
+    address: str
+    additional_info: Optional[str] 
+    region: str
+    city: str 
     is_default: bool = False
 
 class AddressCreate(AddressBase):
@@ -125,21 +128,3 @@ class AddressResponse(AddressBase):
     id: int
     user_id: int
     created_at: datetime
-    
-    class Config:
-        from_attributes = True
-
-
-class OrderItemCreate(BaseModel):
-    product_id: int
-    quantity: float
-    unit_price: float
-
-class OrderCreate(BaseModel):
-    delivery_address_id: int
-    billing_address_id: int
-    payment_method: str
-    subtotal: float
-    shipping_fee: float
-    total: float
-    items: List[OrderItemCreate]

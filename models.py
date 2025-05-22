@@ -72,31 +72,39 @@ class Address(Base):
 
 class Orders(Base):
     __tablename__ = "orders"
-    id = Column(Integer, primary_key=True, index=True)
-    order_number = Column(String(50), unique=True, nullable=False)  
-    subtotal = Column(Numeric(precision=14, scale=2), nullable=False)  
-    shipping_fee = Column(Numeric(precision=14, scale=2), nullable=False)  
-    total = Column(Numeric(precision=14, scale=2), nullable=False)  
+    order_id = Column(Integer, primary_key=True, index=True)
+    total = Column(Numeric(precision=14, scale=2))
     datetime = Column(DateTime, default=func.now(), index=True)
     status = Column(Enum(OrderStatus), default=OrderStatus.PENDING, nullable=False)
-    payment_method = Column(String(100), nullable=False)  
-    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
-    delivery_address_id = Column(Integer, ForeignKey('addresses.id'), nullable=False)  
-    billing_address_id = Column(Integer, ForeignKey('addresses.id'), nullable=False)  
-
+    user_id = Column(Integer, ForeignKey('users.id'))
+    address_id = Column(Integer, ForeignKey('addresses.id'), nullable=True)
     user = relationship("Users", back_populates="orders")
     order_details = relationship("OrderDetails", back_populates="order")
-    delivery_address = relationship("Address", foreign_keys=[delivery_address_id], back_populates="orders_delivery")  
-    billing_address = relationship("Address", foreign_keys=[billing_address_id], back_populates="orders_billing")
+    address = relationship("Address")
 
 class OrderDetails(Base):
     __tablename__ = "order_details"
-    id = Column(Integer, primary_key=True)
-    order_id = Column(Integer, ForeignKey("orders.id"))
+    order_detail_id = Column(Integer, primary_key=True)
+    order_id = Column(Integer, ForeignKey("orders.order_id"))
     product_id = Column(Integer, ForeignKey("products.id"))
-    quantity = Column(Numeric(precision=15, scale=2), nullable=False)
-    unit_price = Column(Numeric(precision=14, scale=2), nullable=False) 
-    total_price = Column(Numeric(precision=15, scale=2), nullable=False) 
-    
+    quantity = Column(Numeric(precision=15, scale=2))
+    total_price = Column(Numeric(precision=15, scale=2))
     product = relationship("Products", back_populates="order_details")
     order = relationship("Orders", back_populates="order_details")
+
+class Address(Base):
+    __tablename__ = 'addresses'
+    id = Column(Integer, primary_key=True, index=True)
+    first_name = Column(String(100), nullable=False)  
+    last_name = Column(String(100), nullable=False)  
+    phone_number = Column(String(20), nullable=False)
+    address = Column(String(100), nullable=False)  
+    additional_info = Column(String(255), nullable=True) 
+    region = Column(String(100), nullable=True)  # New field for Regions
+    city = Column(String(100), nullable=False)
+    is_default = Column(Boolean, default=False, nullable=False)
+    user_id = Column(Integer, ForeignKey('users.id'))
+    created_at = Column(DateTime, default=func.now())
+    
+    user = relationship("Users", back_populates="addresses")
+    orders = relationship("Orders", back_populates="address") 

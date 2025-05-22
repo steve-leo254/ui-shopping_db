@@ -298,50 +298,39 @@ async def dashboard(user: user_dependency, db: db_dependency):
         logger.error(f"Error fetching dashboard data: {str(e)}")
         raise HTTPException(status_code=500, detail="Error fetching dashboard data")
 
+# Create Address endpoint
 @app.post("/addresses", response_model=AddressResponse, status_code=status.HTTP_201_CREATED)
 async def create_address(user: user_dependency, db: db_dependency, address: AddressCreate):
     try:
-        user_id = user.get("id")
-        if not user_id:
-            raise HTTPException(status_code=401, detail="Invalid user authentication")
-
-        # Unset other default addresses if this is default
-        if getattr(address, "is_default", False):
-            stmt = update(models.Address).where(
-                models.Address.user_id == user_id,
+        # If setting as default, unset other default addresses for this user
+        if address.is_default:
+            db.query(models.Address).filter(
+                models.Address.user_id == user.get("id"),
                 models.Address.is_default == True
-            ).values(is_default=False)
-            await db.execute(stmt)
-            await db.commit()
-
-        # Create new address
+            ).update({"is_default": False})
+        
         db_address = models.Address(
             **address.dict(),
-            user_id=user_id,
-            created_at=datetime.utcnow()
+            user_id=user.get("id")
         )
         db.add(db_address)
-        await db.commit()
-        await db.refresh(db_address)
-
-        logger.info(f"Address created for user {user_id}: Address ID {db_address.id}")
+        db.commit()
+        db.refresh(db_address)
+        logger.info(f"Address created for user {user.get('id')}: Address ID {db_address.id}")
         return db_address
-    except IntegrityError as e:
-        await db.rollback()
-        logger.error(f"Integrity error creating address: {str(e)}")
-        raise HTTPException(status_code=400, detail="Address already exists or invalid data")
     except SQLAlchemyError as e:
-        await db.rollback()
-        logger.error(f"Database error creating address: {str(e)}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        db.rollback()
+        logger.error(f"Error creating address: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error creating address")
 
+
+# Get Addresses endpoint
 @app.get("/addresses", response_model=List[AddressResponse], status_code=status.HTTP_200_OK)
 async def get_addresses(user: user_dependency, db: db_dependency):
     try:
-        result = await db.execute(
-            select(models.Address).filter(models.Address.user_id == user.get("id"))
-        )
-        addresses = result.scalars().all()
+        addresses = db.query(models.Address).filter(
+            models.Address.user_id == user.get("id")
+        ).all()
         if not addresses:
             logger.info(f"No addresses found for user {user.get('id')}")
             return []
@@ -349,7 +338,8 @@ async def get_addresses(user: user_dependency, db: db_dependency):
         return addresses
     except SQLAlchemyError as e:
         logger.error(f"Error fetching addresses: {str(e)}")
-        raise HTTPException(status_code=500, detail="Error fetching addresses")
+
+
 
 @app.delete("/addresses/{address_id}", status_code=status.HTTP_200_OK)
 async def delete_address(address_id: int, user: user_dependency, db: db_dependency):
