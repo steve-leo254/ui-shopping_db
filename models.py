@@ -9,7 +9,6 @@ class Role(enum.Enum):
 
 class OrderStatus(enum.Enum):
     PENDING = "pending"
-    PROCESSING = "processing"
     SHIPPED = "shipped"
     DELIVERED = "delivered"
     CANCELLED = "cancelled"
@@ -53,22 +52,6 @@ class Products(Base):
 
 
 
-class Address(Base):
-    __tablename__ = 'addresses'
-    id = Column(Integer, primary_key=True, index=True)
-    phone_number = Column(String(20), nullable=False)
-    street = Column(String(200), nullable=False)
-    city = Column(String(100), nullable=False)
-    postal_code = Column(String(20), nullable=False)
-    country = Column(String(100), nullable=False)
-    is_default = Column(Boolean, default=False, nullable=False)
-    user_id = Column(Integer, ForeignKey('users.id'))
-    created_at = Column(DateTime, default=func.now())
-    
-    user = relationship("Users", back_populates="addresses")
-    orders_delivery = relationship("Orders", foreign_keys="Orders.delivery_address_id", back_populates="delivery_address") 
-    orders_billing = relationship("Orders", foreign_keys="Orders.billing_address_id", back_populates="billing_address")  
-
 
 class Orders(Base):
     __tablename__ = "orders"
@@ -100,7 +83,7 @@ class Address(Base):
     phone_number = Column(String(20), nullable=False)
     address = Column(String(100), nullable=False)  
     additional_info = Column(String(255), nullable=True) 
-    region = Column(String(100), nullable=True)  # New field for Regions
+    region = Column(String(100), nullable=True) 
     city = Column(String(100), nullable=False)
     is_default = Column(Boolean, default=False, nullable=False)
     user_id = Column(Integer, ForeignKey('users.id'))
