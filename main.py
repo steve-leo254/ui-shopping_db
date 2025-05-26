@@ -282,36 +282,43 @@ async def create_address(user: user_dependency, db: db_dependency, address: Addr
     try:
         # If setting as default, unset other default addresses for this user
         if address.is_default:
-            db.query(models.Address).filter(
-                models.Address.user_id == user.get("id"),
-                models.Address.is_default == True
-            ).update({"is_default": False})
+            stmt = (
+                update(models.Address)
+                .where(
+                    models.Address.user_id == user.get("id"),
+                    models.Address.is_default == True
+                )
+                .values(is_default=False)
+            )
+            await db.execute(stmt)
         
+        # Create new address
         db_address = models.Address(
             **address.dict(),
             user_id=user.get("id")
         )
         db.add(db_address)
-        db.commit()
-        db.refresh(db_address)
+        await db.commit()
+        await db.refresh(db_address)
         logger.info(f"Address created for user {user.get('id')}: Address ID {db_address.id}")
         return db_address
     except SQLAlchemyError as e:
-        db.rollback()
+        await db.rollback()
         logger.error(f"Error creating address: {str(e)}")
-        raise HTTPException(status_code=500, detail="Error creating address")
+        raise HTTPException(status_code=500, detail="Error creating address")   
+    
 
-# Get Addresses endpoint
-@app.get("/addresses", response_model=List[AddressResponse], status_code=status.HTTP_200_OK)
-async def get_addresses(user: user_dependency, db: db_dependency):
+@app.get("/addresses", response_model=List[AddressResponse])
+async def get_addresses(
+    user: user_dependency,
+    db: db_dependency,
+    limit: int = Query(10, ge=1),
+    offset: int = Query(0, ge=0)
+):
     try:
-        # Create a select statement to query addresses for the user
-        stmt = select(models.Address).where(models.Address.user_id == user.get("id"))
-        # Execute the statement asynchronously
+        stmt = select(models.Address).where(models.Address.user_id == user.get("id")).limit(limit).offset(offset)
         result = await db.execute(stmt)
-        # Get all address objects from the result
         addresses = result.scalars().all()
-        
         if not addresses:
             logger.info(f"No addresses found for user {user.get('id')}")
             return []
@@ -320,6 +327,7 @@ async def get_addresses(user: user_dependency, db: db_dependency):
     except SQLAlchemyError as e:
         logger.error(f"Error fetching addresses: {str(e)}")
         raise HTTPException(status_code=500, detail="Error fetching addresses")
+        
 
 
 @app.delete("/addresses/{id}", status_code=status.HTTP_200_OK)
@@ -438,11 +446,11 @@ async def fetch_orders(
         # Fetch orders with joinedload for related data
         query = query.options(
             joinedload(models.Orders.order_details).joinedload(models.OrderDetails.product).joinedload(models.Products.category),  # Eagerly load product and its category
-            joinedload(models.Orders.address)  # Eagerly load address
+            joinedload(models.Orders.address)  
         ).offset(skip).limit(limit)
         
         result = await db.execute(query)
-        orders = result.unique().scalars().all()  # Use unique() for collection-based joinedload
+        orders = result.unique().scalars().all()  
         
         page = (skip // limit) + 1
         pages = ceil(total / limit) if limit > 0 else 0
@@ -474,11 +482,11 @@ async def get_order_by_id(
             models.Orders.user_id == user.get("id")
         ).options(
             joinedload(models.Orders.order_details).joinedload(models.OrderDetails.product).joinedload(models.Products.category),  # Eagerly load product and its category
-            joinedload(models.Orders.address)  # Eagerly load address
+            joinedload(models.Orders.address) 
         )
         
         result = await db.execute(query)
-        order = result.unique().scalars().first()  # Use unique() for collection-based joinedload
+        order = result.unique().scalars().first() 
         
         if not order:
             logger.info(f"Order not found: ID {order_id} for user {user.get('id')}")
