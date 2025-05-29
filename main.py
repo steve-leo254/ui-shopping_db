@@ -1,14 +1,14 @@
-from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File,Query
+from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File, Query
 from pydantic_model import (
     ProductsBase, CartPayload, CartItem, UpdateProduct, CategoryBase, CategoryResponse,
-    ProductResponse, OrderResponse, Role, PaginatedProductResponse,
-     ImageResponse, AddressCreate, AddressResponse, PaginatedOrderResponse, OrderStatus
-)
-from typing import Annotated, List,Optional
+    ProductResponse, OrderResponse, OrderDetailResponse, Role, PaginatedProductResponse,
+     ImageResponse, AddressCreate, AddressResponse, PaginatedOrderResponse, OrderStatus, InitiatePaymentRequest,
+      PaymentCallbackRequest, PaginatedOrderWithUserResponse, OrderWithUserResponse, OrderStatusUpdate)
+from typing import Annotated, List, Optional
 import models
 from database import engine, db_dependency
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.exc import SQLAlchemyError, IntegrityError
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import select, func, update
 from sqlalchemy.orm import joinedload
 import auth
@@ -250,6 +250,291 @@ async def delete_product(product_id: int, db: db_dependency, user: user_dependen
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/create_order", status_code=status.HTTP_201_CREATED)
+async def create_order(db: db_dependency, user: user_dependency, order_payload: CartPayload):
+    try:
+        address_id = order_payload.address_id
+        if address_id:
+            stmt = select(models.Address).filter(
+                models.Address.id == address_id,
+                models.Address.user_id == user.get("id")
+            )
+            result = await db.execute(stmt)
+            address = result.scalars().first()
+            if not address:
+                raise HTTPException(status_code=400, detail="Invalid address ID")
+        
+        delivery_fee = Decimal(str(order_payload.delivery_fee))
+        new_order = models.Orders(
+            user_id=user.get("id"),
+            total=0,
+            address_id=address_id,
+            delivery_fee=delivery_fee
+        )
+        db.add(new_order)
+        await db.commit()
+        await db.refresh(new_order)
+        
+        total_cost = Decimal('0')
+        for item in order_payload.cart:
+            stmt = select(models.Products).filter_by(id=item.id)
+            result = await db.execute(stmt)
+            product = result.scalars().first()
+            if not product:
+                await db.rollback()
+                raise HTTPException(status_code=404, detail=f"Product ID {item.id} not found")
+            quantity = Decimal(str(item.quantity))
+            if product.stock_quantity < quantity:
+                await db.rollback()
+                raise HTTPException(status_code=400, detail=f"Insufficient stock for product {product.name}")
+            
+            order_detail = models.OrderDetails(
+                order_id=new_order.order_id,
+                product_id=product.id,
+                quantity=quantity,
+                total_price=product.price * quantity,
+            )
+            total_cost += order_detail.total_price
+            product.stock_quantity -= quantity
+            db.add(order_detail)
+        
+        new_order.total = total_cost + new_order.delivery_fee
+        await db.commit()
+        
+        logger.info(f"Order {new_order.order_id} created for user {user.get('id')}")
+        return {
+            "message": "Order created successfully",
+            "order_id": new_order.order_id,
+        }
+    except SQLAlchemyError as e:
+        await db.rollback()
+        logger.error(f"Error creating order: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+    except ValueError as e:
+        await db.rollback()
+        logger.error(f"Invalid quantity value: {str(e)}")
+        raise HTTPException(status_code=400, detail="Invalid quantity value")
+
+@app.get("/orders", response_model=PaginatedOrderResponse, status_code=status.HTTP_200_OK)
+async def fetch_orders(
+    user: user_dependency,
+    db: db_dependency,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=100),
+    status: Optional[OrderStatus] = None
+):
+    try:
+        query = select(models.Orders).filter(models.Orders.user_id == user.get("id"))
+        if status:
+            query = query.filter(models.Orders.status == status)
+        
+        count_query = select(func.count()).select_from(models.Orders).filter(models.Orders.user_id == user.get("id"))
+        if status:
+            count_query = count_query.filter(models.Orders.status == status)
+        count_result = await db.execute(count_query)
+        total = count_result.scalar()
+        
+        query = query.options(
+            joinedload(models.Orders.user),  # Eagerly load user
+            joinedload(models.Orders.order_details).joinedload(models.OrderDetails.product).joinedload(models.Products.category),
+            joinedload(models.Orders.address)
+        ).offset(skip).limit(limit)
+        
+        result = await db.execute(query)
+        orders = result.unique().scalars().all()
+        
+        page = (skip // limit) + 1
+        pages = ceil(total / limit) if limit > 0 else 0
+        return {
+            "items": orders,
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "pages": pages
+        }
+    except SQLAlchemyError as e:
+        await db.rollback()
+        logger.error(f"Error fetching orders: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error fetching orders")
+
+@app.get("/orders/{order_id}", response_model=OrderResponse, status_code=status.HTTP_200_OK)
+async def get_order_by_id(
+    order_id: int,
+    user: user_dependency,
+    db: db_dependency
+):
+    try:
+        query = select(models.Orders).filter(
+            models.Orders.order_id == order_id,
+            models.Orders.user_id == user.get("id")
+        ).options(
+            joinedload(models.Orders.user),  # Eagerly load user
+            joinedload(models.Orders.order_details).joinedload(models.OrderDetails.product).joinedload(models.Products.category),
+            joinedload(models.Orders.address)
+        )
+        
+        result = await db.execute(query)
+        order = result.unique().scalars().first()
+        
+        if not order:
+            logger.info(f"Order not found: ID {order_id} for user {user.get('id')}")
+            raise HTTPException(status_code=404, detail="Order not found")
+        
+        logger.info(f"Retrieved order {order_id} for user {user.get('id')}")
+        return order
+    except SQLAlchemyError as e:
+        await db.rollback()
+        logger.error(f"Error fetching order {order_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error fetching order")
+    
+
+
+@app.put("/orders/{order_id}/status", response_model=dict, status_code=status.HTTP_200_OK)
+async def update_order_status(
+    order_id: int,
+    status_update: OrderStatusUpdate,
+    user: user_dependency,
+    db: db_dependency
+):
+    require_admin(user)
+    try:
+        result = await db.execute(
+            select(models.Orders)
+            .filter(models.Orders.order_id == order_id)
+            .options(
+                joinedload(models.Orders.order_details).joinedload(models.OrderDetails.product)
+            )
+        )
+        order = result.unique().scalars().first()
+        if not order:
+            logger.info(f"Order not found: ID {order_id}")
+            raise HTTPException(status_code=404, detail="Order not found")
+
+        new_status = status_update.status
+        if order.status == OrderStatus.DELIVERED and new_status == OrderStatus.CANCELLED:
+            logger.info(f"Cannot cancel delivered order: ID {order_id}")
+            raise HTTPException(status_code=400, detail="Cannot cancel a delivered order")
+        if order.status == OrderStatus.CANCELLED and new_status == OrderStatus.CANCELLED:
+            logger.info(f"Order already cancelled: ID {order_id}")
+            raise HTTPException(status_code=400, detail="Order is already cancelled")
+
+        if new_status == OrderStatus.CANCELLED:
+            for detail in order.order_details:
+                product = detail.product
+                product.stock_quantity += detail.quantity
+                logger.info(f"Restored {detail.quantity} units to product ID {product.id} for order {order_id}")
+
+        order.status = new_status
+        if new_status == OrderStatus.DELIVERED:
+            order.completed_at = func.now()
+        elif order.completed_at and new_status != OrderStatus.DELIVERED:
+            order.completed_at = None
+
+        await db.commit()
+        await db.refresh(order)
+        logger.info(f"Order {order_id} status updated to {new_status} by admin {user.get('id')}")
+        return {"message": "Order status updated successfully"}
+    except SQLAlchemyError as e:
+        await db.rollback()
+        logger.error(f"Error updating order status for order {order_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error updating order status")
+
+
+
+@app.get("/admin/orders", response_model=PaginatedOrderResponse, status_code=status.HTTP_200_OK)
+async def fetch_admin_orders(
+    user: user_dependency,
+    db: db_dependency,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=100),
+    status: Optional[OrderStatus] = None
+):
+    """
+    Retrieve a paginated list of orders containing at least one product added by the admin.
+    Includes full order details and customer information.
+    
+    Args:
+        user: Authenticated admin user (injected via dependency).
+        db: Database session (injected via dependency).
+        skip: Number of records to skip (for pagination).
+        limit: Maximum number of records to return.
+        status: Optional filter by order status.
+    
+    Returns:
+        PaginatedOrderResponse containing the list of orders.
+    
+    Raises:
+        HTTPException: 403 if not an admin, 500 if database error occurs.
+    """
+    require_admin(user)
+    try:
+        admin_id = user.get("id")
+        
+        # First, get the order IDs that contain products from this admin
+        subquery = (
+            select(models.Orders.order_id)
+            .join(models.OrderDetails)
+            .join(models.Products)
+            .filter(models.Products.user_id == admin_id)
+            .distinct()
+        )
+        
+        # Apply status filter to subquery if provided
+        if status:
+            subquery = subquery.filter(models.Orders.status == status)
+        
+        # Get the list of order IDs
+        result = await db.execute(subquery)
+        order_ids = [row[0] for row in result.fetchall()]
+        
+        if not order_ids:
+            return {
+                "items": [],
+                "total": 0,
+                "page": 1,
+                "limit": limit,
+                "pages": 0
+            }
+        
+        # Count total orders
+        total = len(order_ids)
+        
+        # Get paginated order IDs
+        paginated_order_ids = order_ids[skip:skip + limit]
+        
+        # Now fetch the full orders with all relationships
+        query = (
+            select(models.Orders)
+            .filter(models.Orders.order_id.in_(paginated_order_ids))
+            .options(
+                joinedload(models.Orders.user),  # Customer details
+                joinedload(models.Orders.order_details).joinedload(models.OrderDetails.product).joinedload(models.Products.category),
+                joinedload(models.Orders.address)
+            )
+        )
+        
+        result = await db.execute(query)
+        orders = result.unique().scalars().all()
+        
+        # Sort orders to match the original order of order_ids
+        orders_dict = {order.order_id: order for order in orders}
+        sorted_orders = [orders_dict[order_id] for order_id in paginated_order_ids if order_id in orders_dict]
+        
+        # Pagination metadata
+        page = (skip // limit) + 1
+        pages = ceil(total / limit) if limit > 0 else 0
+        
+        return {
+            "items": sorted_orders,
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "pages": pages
+        }
+    except SQLAlchemyError as e:
+        logger.error(f"Error fetching admin orders: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error fetching orders")
+
 
 @app.get("/dashboard", status_code=status.HTTP_200_OK)
 async def dashboard(user: user_dependency, db: db_dependency):
@@ -258,11 +543,24 @@ async def dashboard(user: user_dependency, db: db_dependency):
         id = user.get("id")
         today = datetime.utcnow().date()
         
-        total_sales = db.query(func.sum(models.Orders.total)).filter(models.Orders.user_id == id).scalar() or 0
-        total_products = db.query(func.count(models.Products.id)).filter(models.Products.user_id == id).scalar() or 0
-        today_sale = db.query(func.sum(models.Orders.total)).filter(
-            models.Orders.user_id == id, func.date(models.Orders.datetime) == today
-        ).scalar() or 0
+        # Corrected: Calculate sales from orders containing admin's products
+        sales_query = (
+            select(func.sum(models.OrderDetails.total_price))
+            .join(models.Products)
+            .filter(models.Products.user_id == id)
+        )
+        total_sales = (await db.execute(sales_query)).scalar() or 0
+        
+        products_query = select(func.count()).select_from(models.Products).filter(models.Products.user_id == id)
+        total_products = (await db.execute(products_query)).scalar() or 0
+        
+        today_sales_query = (
+            select(func.sum(models.OrderDetails.total_price))
+            .join(models.Orders)
+            .join(models.Products)
+            .filter(models.Products.user_id == id, func.date(models.Orders.datetime) == today)
+        )
+        today_sale = (await db.execute(today_sales_query)).scalar() or 0
         
         return {
             "total_sales": float(total_sales),
@@ -273,14 +571,9 @@ async def dashboard(user: user_dependency, db: db_dependency):
         logger.error(f"Error fetching dashboard data: {str(e)}")
         raise HTTPException(status_code=500, detail="Error fetching dashboard data")
 
-
- 
-
-# Create Address endpoint
 @app.post("/addresses", response_model=AddressResponse, status_code=status.HTTP_201_CREATED)
 async def create_address(user: user_dependency, db: db_dependency, address: AddressCreate):
     try:
-        # If setting as default, unset other default addresses for this user
         if address.is_default:
             stmt = (
                 update(models.Address)
@@ -292,7 +585,6 @@ async def create_address(user: user_dependency, db: db_dependency, address: Addr
             )
             await db.execute(stmt)
         
-        # Create new address
         db_address = models.Address(
             **address.dict(),
             user_id=user.get("id")
@@ -305,8 +597,9 @@ async def create_address(user: user_dependency, db: db_dependency, address: Addr
     except SQLAlchemyError as e:
         await db.rollback()
         logger.error(f"Error creating address: {str(e)}")
-        raise HTTPException(status_code=500, detail="Error creating address")   
-    
+        raise HTTPException(status_code=500, detail="Error creating address")
+
+
 
 @app.get("/addresses", response_model=List[AddressResponse])
 async def get_addresses(
@@ -327,133 +620,78 @@ async def get_addresses(
     except SQLAlchemyError as e:
         logger.error(f"Error fetching addresses: {str(e)}")
         raise HTTPException(status_code=500, detail="Error fetching addresses")
-        
 
 
 @app.delete("/addresses/{id}", status_code=status.HTTP_200_OK)
 async def delete_address(address_id: int, user: user_dependency, db: db_dependency):
     try:
-        address = db.query(models.Address).filter(
-            models.Address.id == address_id,
-            models.Address.user_id == user.get("id")
-        ).first()
+        result = await db.execute(
+            select(models.Address).filter(
+                models.Address.id == address_id,
+                models.Address.user_id == user.get("id")
+            )
+        )
+        address = result.scalars().first()
         if not address:
             logger.info(f"Address not found: ID {address_id} for user {user.get('id')}")
             raise HTTPException(status_code=404, detail="Address not found")
         
-        # Check if address is used in any orders
-        order = db.query(models.Orders).filter(
-            models.Orders.address_id == address_id
-        ).first()
+        order = await db.execute(
+            select(models.Orders).filter(
+                models.Orders.address_id == address_id
+            )
+        )
+        order = order.scalars().first()
         if order:
             logger.info(f"Cannot delete address {address_id}: used in order {order.order_id}")
             raise HTTPException(status_code=400, detail="Cannot delete address used in orders")
         
-        db.delete(address)
-        db.commit()
+        await db.delete(address)
+        await db.commit()
         logger.info(f"Address {address_id} deleted by user {user.get('id')}")
         return {"message": "Address deleted successfully"}
     except SQLAlchemyError as e:
-        db.rollback()
+        await db.rollback()
         logger.error(f"Error deleting address {address_id}: {str(e)}")
         raise HTTPException(status_code=500, detail="Error deleting address")
 
 
-@app.post("/create_order", status_code=status.HTTP_201_CREATED)
-async def create_order(db: db_dependency, user: user_dependency, order_payload: CartPayload):
-    try:
-        address_id = order_payload.address_id
-        if address_id:
-            # Use select statement for async query
-            stmt = select(models.Address).filter(
-                models.Address.id == address_id,
-                models.Address.user_id == user.get("id")
-            )
-            result = await db.execute(stmt)
-            address = result.scalars().first()
-            if not address:
-                raise HTTPException(status_code=400, detail="Invalid address ID")
-        
-        new_order = models.Orders(user_id=user.get("id"), total=0, address_id=address_id)
-        db.add(new_order)
-        await db.commit()  # Use await for async commit
-        await db.refresh(new_order)  # Use await for async refresh
-        
-        total_cost = Decimal('0')
-        for item in order_payload.cart:
-            # Use select statement for async query
-            stmt = select(models.Products).filter_by(id=item.id)
-            result = await db.execute(stmt)
-            product = result.scalars().first()
-            if not product:
-                await db.rollback()  # Use await for async rollback
-                raise HTTPException(status_code=404, detail=f"Product ID {item.id} not found")
-            quantity = Decimal(str(item.quantity))
-            if product.stock_quantity < quantity:
-                await db.rollback()  # Use await for async rollback
-                raise HTTPException(status_code=400, detail=f"Insufficient stock for product {product.name}")
-            
-            order_detail = models.OrderDetails(
-                order_id=new_order.order_id,
-                product_id=product.id,
-                quantity=quantity,
-                total_price=product.price * quantity,
-            )
-            total_cost += order_detail.total_price
-            product.stock_quantity -= quantity
-            db.add(order_detail)
-        
-        new_order.total = total_cost
-        await db.commit()  # Use await for async commit
-        
-        logger.info(f"Order {new_order.order_id} created for user {user.get('id')}")
-        return {
-            "message": "Order created successfully",
-            "order_id": new_order.order_id,
-        }
-    except SQLAlchemyError as e:
-        await db.rollback()  # Use await for async rollback
-        logger.error(f"Error creating order: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-    except ValueError as e:
-        await db.rollback()  # Use await for async rollback
-        logger.error(f"Invalid quantity value: {str(e)}")
-        raise HTTPException(status_code=400, detail="Invalid quantity value")
 
-
-
-@app.get("/orders", response_model=PaginatedOrderResponse, status_code=status.HTTP_200_OK)
-async def fetch_orders(
+@app.get("/admin/orders", response_model=PaginatedOrderWithUserResponse, status_code=status.HTTP_200_OK)
+async def fetch_all_orders(
     user: user_dependency,
     db: db_dependency,
     skip: int = Query(0, ge=0),
     limit: int = Query(10, ge=1, le=100),
     status: Optional[OrderStatus] = None
 ):
+    """
+    Fetch all orders with associated user and address details (admin only).
+    Supports pagination and optional status filtering.
+    Excludes order_details.
+    """
+    require_admin(user)
     try:
-        # Create a select statement for orders
-        query = select(models.Orders).filter(models.Orders.user_id == user.get("id"))
+        query = db.query(models.Orders).join(models.Users, models.Orders.user_id == models.Users.id)
         if status:
             query = query.filter(models.Orders.status == status)
         
-        # Get total count of orders
-        count_query = select(func.count()).select_from(models.Orders).filter(models.Orders.user_id == user.get("id"))
-        if status:
-            count_query = count_query.filter(models.Orders.status == status)
-        count_result = await db.execute(count_query)
-        total = count_result.scalar()
-        
-        # Fetch orders with joinedload for related data
-        query = query.options(
-            joinedload(models.Orders.order_details).joinedload(models.OrderDetails.product).joinedload(models.Products.category),  # Eagerly load product and its category
-            joinedload(models.Orders.address)  
-        ).offset(skip).limit(limit)
-        
-        result = await db.execute(query)
-        orders = result.unique().scalars().all()  
-        
+        total = query.count()
+        orders = (
+            query
+            .options(
+                joinedload(models.Orders.address),
+                joinedload(models.Orders.user)
+            )
+            .offset(skip)
+            .limit(limit)
+            .all()
+        )
+
         page = (skip // limit) + 1
         pages = ceil(total / limit) if limit > 0 else 0
+
+        logger.info(f"Admin {user.get('id')} fetched {len(orders)} orders (page {page}, limit {limit})")
         return {
             "items": orders,
             "total": total,
@@ -462,43 +700,8 @@ async def fetch_orders(
             "pages": pages
         }
     except SQLAlchemyError as e:
-        await db.rollback()  # Ensure rollback on error
-        logger.error(f"Error fetching orders: {str(e)}")
+        logger.error(f"Error fetching all orders: {str(e)}")
         raise HTTPException(status_code=500, detail="Error fetching orders")
-
-
-@app.get("/orders/{order_id}", response_model=OrderResponse, status_code=status.HTTP_200_OK)
-async def get_order_by_id(
-    order_id: int,
-    user: user_dependency,
-    db: db_dependency
-):
-    """
-    Fetch a specific order by ID for the authenticated user
-    """
-    try:
-        query = select(models.Orders).filter(
-            models.Orders.order_id == order_id,
-            models.Orders.user_id == user.get("id")
-        ).options(
-            joinedload(models.Orders.order_details).joinedload(models.OrderDetails.product).joinedload(models.Products.category),  # Eagerly load product and its category
-            joinedload(models.Orders.address) 
-        )
-        
-        result = await db.execute(query)
-        order = result.unique().scalars().first() 
-        
-        if not order:
-            logger.info(f"Order not found: ID {order_id} for user {user.get('id')}")
-            raise HTTPException(status_code=404, detail="Order not found")
-        
-        logger.info(f"Retrieved order {order_id} for user {user.get('id')}")
-        return order
-    except SQLAlchemyError as e:
-        await db.rollback()  # Ensure rollback on error
-        logger.error(f"Error fetching order {order_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail="Error fetching order")
-
 
 
 
