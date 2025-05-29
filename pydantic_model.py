@@ -10,14 +10,7 @@ class Role(str, Enum):
 
 class OrderStatus(str, Enum):
     PENDING = "pending"
-    SHIPPED = "shipped"  # Added missing status
     DELIVERED = "delivered"
-    CANCELLED = "cancelled"
-
-class TransactionStatus(str, Enum):
-    PENDING = "pending"
-    COMPLETED = "completed"
-    FAILED = "failed"
     CANCELLED = "cancelled"
 
 class CreateUserRequest(BaseModel):
@@ -77,8 +70,6 @@ class OrderDetailResponse(BaseModel):
     class Config:
         from_attributes = True
 
-class OrderStatusUpdate(BaseModel):
-    status: OrderStatus
 
 class TokenVerifyRequest(BaseModel):
     token: str
@@ -136,6 +127,7 @@ class AddressResponse(AddressBase):
     class Config:
         from_attributes = True  # Enables ORM compatibility for SQLAlchemy models
 
+
 class OrderResponse(BaseModel):
     order_id: int
     total: float
@@ -150,12 +142,15 @@ class OrderResponse(BaseModel):
     class Config:
         from_attributes = True
 
+
 class PaginatedOrderResponse(BaseModel):
     items: List[OrderResponse]
     total: int
     page: int
     limit: int
     pages: int
+
+
 
 class InitiatePaymentRequest(BaseModel):
     party_a: str
@@ -167,9 +162,11 @@ class InitiatePaymentRequest(BaseModel):
     transaction_aggregator: int
     transaction_details: str
 
+
 class PaymentCallbackRequest(BaseModel):
     transaction_id: str
     status: str  # e.g., "success", "failed"
+
 
 # Pydantic model for user details in the response
 class UserResponse(BaseModel):

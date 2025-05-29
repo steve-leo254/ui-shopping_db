@@ -2,8 +2,9 @@ from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File, Q
 from pydantic_model import (
     ProductsBase, CartPayload, CartItem, UpdateProduct, CategoryBase, CategoryResponse,
     ProductResponse, OrderResponse, OrderDetailResponse, Role, PaginatedProductResponse,
-     ImageResponse, AddressCreate, AddressResponse, PaginatedOrderResponse, OrderStatus, InitiatePaymentRequest,
-      PaymentCallbackRequest, PaginatedOrderWithUserResponse, OrderWithUserResponse, OrderStatusUpdate)
+    ImageResponse, AddressCreate, AddressResponse, PaginatedOrderResponse, OrderStatus,
+    InitiatePaymentRequest, PaymentCallbackRequest, PaginatedOrderWithUserResponse
+)
 from typing import Annotated, List, Optional
 import models
 from database import engine, db_dependency
@@ -221,7 +222,6 @@ async def update_product(product_id: int, updated_data: UpdateProduct, user: use
         logger.error(f"Error updating product: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.delete("/delete-product/{product_id}", status_code=status.HTTP_200_OK)
 async def delete_product(product_id: int, db: db_dependency, user: user_dependency):
     require_admin(user)
@@ -248,7 +248,6 @@ async def delete_product(product_id: int, db: db_dependency, user: user_dependen
         await db.rollback()
         logger.error(f"Error deleting product: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.post("/create_order", status_code=status.HTTP_201_CREATED)
 async def create_order(db: db_dependency, user: user_dependency, order_payload: CartPayload):
@@ -335,7 +334,7 @@ async def fetch_orders(
         total = count_result.scalar()
         
         query = query.options(
-            joinedload(models.Orders.user),  # Eagerly load user
+            joinedload(models.Orders.user),
             joinedload(models.Orders.order_details).joinedload(models.OrderDetails.product).joinedload(models.Products.category),
             joinedload(models.Orders.address)
         ).offset(skip).limit(limit)
@@ -364,177 +363,25 @@ async def get_order_by_id(
     db: db_dependency
 ):
     try:
-        query = select(models.Orders).filter(
-            models.Orders.order_id == order_id,
-            models.Orders.user_id == user.get("id")
-        ).options(
-            joinedload(models.Orders.user),  # Eagerly load user
-            joinedload(models.Orders.order_details).joinedload(models.OrderDetails.product).joinedload(models.Products.category),
-            joinedload(models.Orders.address)
-        )
-        
-        result = await db.execute(query)
-        order = result.unique().scalars().first()
-        
-        if not order:
-            logger.info(f"Order not found: ID {order_id} for user {user.get('id')}")
-            raise HTTPException(status_code=404, detail="Order not found")
-        
-        logger.info(f"Retrieved order {order_id} for user {user.get('id')}")
-        return order
-    except SQLAlchemyError as e:
-        await db.rollback()
-        logger.error(f"Error fetching order {order_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail="Error fetching order")
-    
-
-
-@app.put("/orders/{order_id}/status", response_model=dict, status_code=status.HTTP_200_OK)
-async def update_order_status(
-    order_id: int,
-    status_update: OrderStatusUpdate,
-    user: user_dependency,
-    db: db_dependency
-):
-    require_admin(user)
-    try:
         result = await db.execute(
-            select(models.Orders)
-            .filter(models.Orders.order_id == order_id)
-            .options(
-                joinedload(models.Orders.order_details).joinedload(models.OrderDetails.product)
-            )
-        )
-        order = result.unique().scalars().first()
-        if not order:
-            logger.info(f"Order not found: ID {order_id}")
-            raise HTTPException(status_code=404, detail="Order not found")
-
-        new_status = status_update.status
-        if order.status == OrderStatus.DELIVERED and new_status == OrderStatus.CANCELLED:
-            logger.info(f"Cannot cancel delivered order: ID {order_id}")
-            raise HTTPException(status_code=400, detail="Cannot cancel a delivered order")
-        if order.status == OrderStatus.CANCELLED and new_status == OrderStatus.CANCELLED:
-            logger.info(f"Order already cancelled: ID {order_id}")
-            raise HTTPException(status_code=400, detail="Order is already cancelled")
-
-        if new_status == OrderStatus.CANCELLED:
-            for detail in order.order_details:
-                product = detail.product
-                product.stock_quantity += detail.quantity
-                logger.info(f"Restored {detail.quantity} units to product ID {product.id} for order {order_id}")
-
-        order.status = new_status
-        if new_status == OrderStatus.DELIVERED:
-            order.completed_at = func.now()
-        elif order.completed_at and new_status != OrderStatus.DELIVERED:
-            order.completed_at = None
-
-        await db.commit()
-        await db.refresh(order)
-        logger.info(f"Order {order_id} status updated to {new_status} by admin {user.get('id')}")
-        return {"message": "Order status updated successfully"}
-    except SQLAlchemyError as e:
-        await db.rollback()
-        logger.error(f"Error updating order status for order {order_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail="Error updating order status")
-
-
-
-@app.get("/admin/orders", response_model=PaginatedOrderResponse, status_code=status.HTTP_200_OK)
-async def fetch_admin_orders(
-    user: user_dependency,
-    db: db_dependency,
-    skip: int = Query(0, ge=0),
-    limit: int = Query(10, ge=1, le=100),
-    status: Optional[OrderStatus] = None
-):
-    """
-    Retrieve a paginated list of orders containing at least one product added by the admin.
-    Includes full order details and customer information.
-    
-    Args:
-        user: Authenticated admin user (injected via dependency).
-        db: Database session (injected via dependency).
-        skip: Number of records to skip (for pagination).
-        limit: Maximum number of records to return.
-        status: Optional filter by order status.
-    
-    Returns:
-        PaginatedOrderResponse containing the list of orders.
-    
-    Raises:
-        HTTPException: 403 if not an admin, 500 if database error occurs.
-    """
-    require_admin(user)
-    try:
-        admin_id = user.get("id")
-        
-        # First, get the order IDs that contain products from this admin
-        subquery = (
-            select(models.Orders.order_id)
-            .join(models.OrderDetails)
-            .join(models.Products)
-            .filter(models.Products.user_id == admin_id)
-            .distinct()
-        )
-        
-        # Apply status filter to subquery if provided
-        if status:
-            subquery = subquery.filter(models.Orders.status == status)
-        
-        # Get the list of order IDs
-        result = await db.execute(subquery)
-        order_ids = [row[0] for row in result.fetchall()]
-        
-        if not order_ids:
-            return {
-                "items": [],
-                "total": 0,
-                "page": 1,
-                "limit": limit,
-                "pages": 0
-            }
-        
-        # Count total orders
-        total = len(order_ids)
-        
-        # Get paginated order IDs
-        paginated_order_ids = order_ids[skip:skip + limit]
-        
-        # Now fetch the full orders with all relationships
-        query = (
-            select(models.Orders)
-            .filter(models.Orders.order_id.in_(paginated_order_ids))
-            .options(
-                joinedload(models.Orders.user),  # Customer details
-                joinedload(models.Orders.order_details).joinedload(models.OrderDetails.product).joinedload(models.Products.category),
+            select(models.Orders).filter(
+                models.Orders.order_id == order_id,
+                models.Orders.user_id == user.get("id")
+            ).options(
+                joinedload(models.Orders.order_details).joinedload(models.OrderDetails.product),
                 joinedload(models.Orders.address)
             )
         )
-        
-        result = await db.execute(query)
-        orders = result.unique().scalars().all()
-        
-        # Sort orders to match the original order of order_ids
-        orders_dict = {order.order_id: order for order in orders}
-        sorted_orders = [orders_dict[order_id] for order_id in paginated_order_ids if order_id in orders_dict]
-        
-        # Pagination metadata
-        page = (skip // limit) + 1
-        pages = ceil(total / limit) if limit > 0 else 0
-        
-        return {
-            "items": sorted_orders,
-            "total": total,
-            "page": page,
-            "limit": limit,
-            "pages": pages
-        }
+        order = result.scalars().first()
+        if not order:
+            logger.info(f"Order not found: ID {order_id} for user {user.get('id')}")
+            raise HTTPException(status_code=404, detail="Order not found")
+        return order
     except SQLAlchemyError as e:
-        logger.error(f"Error fetching admin orders: {str(e)}")
-        raise HTTPException(status_code=500, detail="Error fetching orders")
+        logger.error(f"Error fetching order {order_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error fetching order")
 
+    
 
 @app.get("/dashboard", status_code=status.HTTP_200_OK)
 async def dashboard(user: user_dependency, db: db_dependency):
@@ -543,7 +390,6 @@ async def dashboard(user: user_dependency, db: db_dependency):
         id = user.get("id")
         today = datetime.utcnow().date()
         
-        # Corrected: Calculate sales from orders containing admin's products
         sales_query = (
             select(func.sum(models.OrderDetails.total_price))
             .join(models.Products)
@@ -599,8 +445,6 @@ async def create_address(user: user_dependency, db: db_dependency, address: Addr
         logger.error(f"Error creating address: {str(e)}")
         raise HTTPException(status_code=500, detail="Error creating address")
 
-
-
 @app.get("/addresses", response_model=List[AddressResponse])
 async def get_addresses(
     user: user_dependency,
@@ -620,7 +464,6 @@ async def get_addresses(
     except SQLAlchemyError as e:
         logger.error(f"Error fetching addresses: {str(e)}")
         raise HTTPException(status_code=500, detail="Error fetching addresses")
-
 
 @app.delete("/addresses/{id}", status_code=status.HTTP_200_OK)
 async def delete_address(address_id: int, user: user_dependency, db: db_dependency):
@@ -656,37 +499,53 @@ async def delete_address(address_id: int, user: user_dependency, db: db_dependen
         raise HTTPException(status_code=500, detail="Error deleting address")
 
 
-
 @app.get("/admin/orders", response_model=PaginatedOrderWithUserResponse, status_code=status.HTTP_200_OK)
 async def fetch_all_orders(
     user: user_dependency,
     db: db_dependency,
     skip: int = Query(0, ge=0),
     limit: int = Query(10, ge=1, le=100),
-    status: Optional[OrderStatus] = None
+    status: Optional[OrderStatus] = None,
+    search: Optional[str] = None  # Add search parameter
 ):
-    """
-    Fetch all orders with associated user and address details (admin only).
-    Supports pagination and optional status filtering.
-    Excludes order_details.
-    """
     require_admin(user)
     try:
-        query = db.query(models.Orders).join(models.Users, models.Orders.user_id == models.Users.id)
+        # Base query with join
+        query = select(models.Orders).join(models.Users, models.Orders.user_id == models.Users.id)
         if status:
             query = query.filter(models.Orders.status == status)
-        
-        total = query.count()
-        orders = (
-            query
-            .options(
-                joinedload(models.Orders.address),
-                joinedload(models.Orders.user)
+        if search:
+            query = query.join(models.Address, models.Orders.address_id == models.Address.id, isouter=True).filter(
+                or_(
+                    models.Users.username.ilike(f"%{search}%"),
+                    models.Address.first_name.ilike(f"%{search}%"),
+                    models.Address.last_name.ilike(f"%{search}%")
+                )
             )
-            .offset(skip)
-            .limit(limit)
-            .all()
-        )
+        
+        # Count query for pagination
+        count_query = select(func.count()).select_from(models.Orders).join(models.Users, models.Orders.user_id == models.Users.id)
+        if status:
+            count_query = count_query.filter(models.Orders.status == status)
+        if search:
+            count_query = count_query.join(models.Address, models.Orders.address_id == models.Address.id, isouter=True).filter(
+                or_(
+                    models.Users.username.ilike(f"%{search}%"),
+                    models.Address.first_name.ilike(f"%{search}%"),
+                    models.Address.last_name.ilike(f"%{search}%")
+                )
+            )
+        count_result = await db.execute(count_query)
+        total = count_result.scalar()
+        
+        # Paginated query with eager loading
+        query = query.options(
+            joinedload(models.Orders.address),
+            joinedload(models.Orders.user)
+        ).offset(skip).limit(limit)
+        
+        result = await db.execute(query)
+        orders = result.unique().scalars().all()
 
         page = (skip // limit) + 1
         pages = ceil(total / limit) if limit > 0 else 0
@@ -703,6 +562,46 @@ async def fetch_all_orders(
         logger.error(f"Error fetching all orders: {str(e)}")
         raise HTTPException(status_code=500, detail="Error fetching orders")
 
+
+@app.put("/update-order-status/{order_id}", status_code=status.HTTP_200_OK)
+async def update_order_status(
+    order_id: int,
+    new_status: OrderStatus,
+    user: user_dependency,
+    db: db_dependency
+):
+    """
+    Update the status of an order and set completed_at if status is DELIVERED
+    """
+    try:
+        require_admin(user)  # Only admins can update order status
+        result = await db.execute(
+            select(models.Orders).filter(models.Orders.order_id == order_id)
+        )
+        order = result.scalars().first()
+        if not order:
+            logger.info(f"Order not found: ID {order_id}")
+            raise HTTPException(status_code=404, detail="Order not found")
+        
+        # Update status
+        order.status = new_status
+        
+        # Set completed_at if status is DELIVERED
+        if new_status == OrderStatus.DELIVERED:
+            order.completed_at = func.now()
+        elif order.completed_at and new_status != OrderStatus.DELIVERED:
+            # Optionally clear completed_at if status changes away from DELIVERED
+            order.completed_at = None
+        
+        await db.commit()
+        await db.refresh(order)
+        
+        logger.info(f"Order {order_id} status updated to {new_status} by user {user.get('id')}")
+        return {"message": f"Order status updated to {new_status}"}
+    except SQLAlchemyError as e:
+        await db.rollback()
+        logger.error(f"Error updating order status for order {order_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error updating order status")
 
 
 

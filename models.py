@@ -1,8 +1,16 @@
-from sqlalchemy import Column, Integer, String, func, DateTime, Numeric, ForeignKey, Enum, Boolean, Text, JSON
+from sqlalchemy import Column, Integer, String, func, DateTime, Numeric, ForeignKey, Enum, Boolean, Text
 from database import Base
 from sqlalchemy.orm import relationship
 import enum
 from datetime import datetime
+from sqlalchemy.dialects.mysql import JSON
+
+class TransactionStatus(enum.Enum):
+    PENDING = 0
+    PROCESSING = 1
+    PROCESSED = 2
+    REJECTED = 3
+    ACCEPTED = 4
 
 class Role(enum.Enum):
     ADMIN = "admin"
@@ -10,14 +18,7 @@ class Role(enum.Enum):
 
 class OrderStatus(enum.Enum):
     PENDING = "pending"
-    SHIPPED = "shipped"
     DELIVERED = "delivered"
-    CANCELLED = "cancelled"
-
-class TransactionStatus(enum.Enum):
-    PENDING = "pending"
-    COMPLETED = "completed"
-    FAILED = "failed"
     CANCELLED = "cancelled"
 
 class Users(Base):
@@ -63,7 +64,7 @@ class Orders(Base):
     order_id = Column(Integer, primary_key=True, index=True)
     total = Column(Numeric(precision=14, scale=2))
     datetime = Column(DateTime, default=func.now(), index=True)
-    status = Column(Enum(OrderStatus), default=OrderStatus.DELIVERED, nullable=False) 
+    status = Column(Enum(OrderStatus), default=OrderStatus.PENDING, nullable=False)
     user_id = Column(Integer, ForeignKey('users.id'))
     address_id = Column(Integer, ForeignKey('addresses.id'), nullable=True)
     delivery_fee = Column(Numeric(precision=14, scale=2), nullable=False, default=0)
@@ -72,6 +73,7 @@ class Orders(Base):
     order_details = relationship("OrderDetails", back_populates="order")
     address = relationship("Address")
     transactions = relationship("Transaction", back_populates="order")
+
 
 class OrderDetails(Base):
     __tablename__ = "order_details"
@@ -91,7 +93,7 @@ class Address(Base):
     phone_number = Column(String(20), nullable=False)
     address = Column(String(100), nullable=False)  
     additional_info = Column(String(255), nullable=True) 
-    region = Column(String(100), nullable=True) 
+    region = Column(String(100), nullable=True)  # New field for Regions
     city = Column(String(100), nullable=False)
     is_default = Column(Boolean, default=False, nullable=False)
     user_id = Column(Integer, ForeignKey('users.id'))
