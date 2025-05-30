@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr 
 from datetime import datetime
 from typing import List, Optional
 from enum import Enum
@@ -12,6 +12,11 @@ class OrderStatus(str, Enum):
     PENDING = "pending"
     DELIVERED = "delivered"
     CANCELLED = "cancelled"
+
+
+class UpdateOrderStatusRequest(BaseModel):
+    status: OrderStatus  
+
 
 class CreateUserRequest(BaseModel):
     username: str
@@ -93,7 +98,7 @@ class UpdateProduct(BaseModel):
     barcode: Optional[int]
     category_id: Optional[int]
     brand: Optional[str]
-    description: Optional[str]  # New description field
+    description: Optional[str] 
 
 class PaginatedProductResponse(BaseModel):
     items: List[ProductResponse]

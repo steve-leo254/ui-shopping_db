@@ -21,6 +21,12 @@ class OrderStatus(enum.Enum):
     DELIVERED = "delivered"
     CANCELLED = "cancelled"
 
+# order_status_enum = Enum(
+#     'pending', 'delivered', 'cancelled',
+#     name='orderstatus',
+#     create_type=False  # Don't auto-create, we'll handle it manually
+# )
+
 class Users(Base):
     __tablename__ = 'users'
     id = Column(Integer, primary_key=True, index=True)
